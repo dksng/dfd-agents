@@ -1,0 +1,435 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import shlex
+import shutil
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .config import Settings
+from .db import Store
+from .events import EventHub
+from .pricing import Pricing
+from .workspace import WorkspaceBuilder, safe_name
+
+RUN_STATUSES_ALLOWING_SUBMIT = {"running"}
+RUN_STATUSES_ALLOWING_REVIEW = {"in_review"}
+RUN_STATUSES_ALLOWING_PUBLIC_RESUME = {"failed"}
+
+
+@dataclass
+class AgentResult:
+    ok: bool
+    submitted: bool = False
+    session_id: str | None = None
+    error: str | None = None
+
+
+class ExecutionEngine:
+    def __init__(
+        self,
+        settings: Settings,
+        store: Store,
+        hub: EventHub,
+        pricing: Pricing,
+        workspace_builder: WorkspaceBuilder,
+    ):
+        self.settings = settings
+        self.store = store
+        self.hub = hub
+        self.pricing = pricing
+        self.workspace_builder = workspace_builder
+        self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+
+    async def start_process(self, process_id: str) -> dict[str, Any]:
+        process = self.store.get_process(process_id)
+        workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / "pending"
+        run = self.store.create_run(process_id, status="draft", workdir_path=str(workdir))
+        actual_workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / run["id"]
+        self.store.update_run(run["id"], workdir_path=str(actual_workdir))
+        snapshot = self.workspace_builder.build(run["id"], process_id)
+        self.store.update_run(run["id"], status="running", input_snapshot_json=snapshot)
+        asyncio.create_task(self._run_agent(run["id"], resume=False))
+        return self.store.get_run(run["id"])
+
+    async def resume_run(self, run_id: str, feedback_text: str) -> dict[str, Any]:
+        parent = self.store.get_run(run_id)
+        if parent["status"] not in RUN_STATUSES_ALLOWING_PUBLIC_RESUME:
+            raise ValueError(f"Run cannot be resumed from status: {parent['status']}")
+        return await self._resume_run(parent, feedback_text)
+
+    async def _resume_run(self, parent: dict[str, Any], feedback_text: str) -> dict[str, Any]:
+        process = self.store.get_process(parent["process_id"])
+        workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / "pending"
+        run = self.store.create_run(
+            process["id"],
+            status="draft",
+            workdir_path=str(workdir),
+            parent_run_id=parent["id"],
+            session_id=parent.get("session_id"),
+        )
+        actual_workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / run["id"]
+        self.store.update_run(run["id"], workdir_path=str(actual_workdir))
+        snapshot = self.workspace_builder.build(run["id"], process["id"], parent_run=parent, feedback_text=feedback_text)
+        self.store.update_run(run["id"], status="running", input_snapshot_json=snapshot)
+        asyncio.create_task(self._run_agent(run["id"], resume=True, feedback_text=feedback_text))
+        return self.store.get_run(run["id"])
+
+    async def submit_run(self, run_id: str) -> dict[str, Any]:
+        run = self.store.get_run(run_id)
+        if run["status"] not in RUN_STATUSES_ALLOWING_SUBMIT:
+            raise ValueError(f"Run cannot be submitted from status: {run['status']}")
+        values = self._read_output_values(run)
+        artifacts = self.store.replace_artifact_values(run_id, values)
+        output_snapshot = {"artifacts": artifacts}
+        self.store.create_review(run_id)
+        updated = self.store.update_run(run_id, status="in_review", output_snapshot_json=output_snapshot)
+        await self._publish(run_id, "status", {"status": "in_review"})
+        await self._log(run_id, "info", "Submitted output for review")
+        return updated
+
+    async def review_run(self, run_id: str, action: str, feedback_text: str) -> dict[str, Any]:
+        run = self.store.get_run(run_id)
+        if run["status"] not in RUN_STATUSES_ALLOWING_REVIEW:
+            raise ValueError(f"Run cannot be reviewed from status: {run['status']}")
+        if action == "approve":
+            self.store.resolve_review(run_id, "approved", feedback_text)
+            updated = self.store.update_run(run_id, status="approved")
+            await self._publish(run_id, "status", {"status": "approved"})
+            return updated
+        self.store.resolve_review(run_id, "rejected", feedback_text)
+        self.store.update_run(run_id, status="rejected")
+        await self._publish(run_id, "status", {"status": "rejected", "feedback_text": feedback_text})
+        return await self._resume_run(run, feedback_text)
+
+    async def register_question(self, run_id: str, question_text: str, wait: bool, timeout_seconds: int | None) -> dict[str, Any]:
+        qa = self.store.create_qa(run_id, question_text)
+        self.store.update_run(run_id, status="waiting_qa", ended_at=None)
+        await self._publish(run_id, "qa", qa)
+        if not wait:
+            return qa
+        timeout = self.settings.qa_timeout_seconds if timeout_seconds is None else timeout_seconds
+        deadline = time.monotonic() + max(timeout, 0)
+        while True:
+            current = self.store.get_qa(qa["id"])
+            if current["status"] == "answered":
+                self.store.update_run(run_id, status="running", ended_at=None)
+                await self._publish(run_id, "status", {"status": "running"})
+                return current
+            if time.monotonic() >= deadline:
+                timed_out = self.store.timeout_qa(qa["id"])
+                if not timed_out.get("timed_out_by_this_call"):
+                    continue
+                self.store.update_run(run_id, status="failed")
+                await self._publish(run_id, "qa_timeout", timed_out)
+                await self._publish(run_id, "status", {"status": "failed"})
+                await self._log(run_id, "error", f"QA timed out after {timeout} seconds")
+                await self.terminate_process(run_id)
+                raise TimeoutError(f"QA timed out after {timeout} seconds")
+            await asyncio.sleep(1)
+
+    async def answer_question(self, qa_id: str, answer_text: str) -> dict[str, Any]:
+        current_qa = self.store.get_qa(qa_id)
+        run = self.store.get_run(current_qa["run_id"])
+        if run["status"] != "waiting_qa":
+            raise ValueError(f"QA cannot be answered while run is {run['status']}")
+        qa = self.store.answer_qa(qa_id, answer_text)
+        self.store.update_run(qa["run_id"], status="running", ended_at=None)
+        await self._publish(qa["run_id"], "qa_answered", qa)
+        await self._publish(qa["run_id"], "status", {"status": "running"})
+        return qa
+
+    async def _run_agent(self, run_id: str, *, resume: bool, feedback_text: str = "") -> None:
+        run = self.store.get_run(run_id)
+        process = self.store.get_process(run["process_id"])
+        adapter = self._select_adapter()
+        await self._log(run_id, "info", f"Starting {process['agent_kind']} agent for {process['name']}")
+        try:
+            result = await adapter.run(self, run, process, resume=resume, feedback_text=feedback_text)
+            if result.session_id:
+                self.store.update_run(run_id, session_id=result.session_id)
+            current = self.store.get_run(run_id)
+            if result.submitted and current["status"] == "running":
+                await self.submit_run(run_id)
+            elif not result.ok and current["status"] == "running":
+                self.store.update_run(run_id, status="failed")
+                await self._publish(run_id, "status", {"status": "failed"})
+                await self._log(run_id, "error", result.error or "Agent failed")
+            elif result.ok and current["status"] == "running":
+                self.store.update_run(run_id, status="failed")
+                await self._publish(run_id, "status", {"status": "failed"})
+                await self._log(run_id, "error", "Agent exited before submitting output")
+        except Exception as exc:  # noqa: BLE001
+            current = self.store.get_run(run_id)
+            if current["status"] in {"running", "waiting_qa", "draft"}:
+                self.store.update_run(run_id, status="failed")
+                await self._publish(run_id, "status", {"status": "failed"})
+            await self._log(run_id, "error", str(exc))
+
+    def register_process(self, run_id: str, process: asyncio.subprocess.Process) -> None:
+        self._active_processes[run_id] = process
+
+    def unregister_process(self, run_id: str, process: asyncio.subprocess.Process) -> None:
+        if self._active_processes.get(run_id) is process:
+            self._active_processes.pop(run_id, None)
+
+    async def terminate_process(self, run_id: str) -> None:
+        process = self._active_processes.get(run_id)
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+        await self._log(run_id, "error", "Terminated agent process after QA timeout")
+
+    def _select_adapter(self) -> "AgentAdapter":
+        mode = self.settings.agent_mode.lower()
+        command = shlex.split(self.settings.claude_command)
+        command_exists = bool(command and shutil.which(command[0]))
+        if mode == "mock" or (mode == "auto" and not command_exists):
+            return MockAgentAdapter()
+        return ClaudeCodeAdapter(command)
+
+    def _read_output_values(self, run: dict[str, Any]) -> list[dict[str, Any]]:
+        workdir = Path(run["workdir_path"])
+        output_yaml = workdir / "output" / "output.yaml"
+        data = yaml.safe_load(output_yaml.read_text(encoding="utf-8")) if output_yaml.exists() else {}
+        items = data.get("output") or []
+        output_ports = [port for port in self.store.get_process(run["process_id"])["ports"] if port["direction"] == "out"]
+        ports_by_id = {port["id"]: port for port in output_ports}
+        ports_by_name = {port["artifact_name"]: port for port in output_ports}
+        values: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            port = ports_by_id.get(item.get("id") or "") or ports_by_name.get(item.get("name") or "")
+            if port is None and index < len(output_ports):
+                port = output_ports[index]
+            if port is None:
+                continue
+            port_id = port["id"]
+            artifact_type = item.get("type")
+            if artifact_type not in {"file", "url", "text"}:
+                artifact_type = port["artifact_type"]
+            value = {"port_id": port_id, "artifact_type": artifact_type}
+            if artifact_type == "file":
+                value["file_path"] = item.get("path") or f"output/{safe_name(item.get('name') or port['artifact_name'])}.md"
+            elif artifact_type == "url":
+                value["url"] = item.get("url") or ""
+            else:
+                value["text_value"] = item.get("text") or ""
+            values.append(value)
+        return values
+
+    async def record_usage(
+        self,
+        run_id: str,
+        process: dict[str, Any],
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read: int = 0,
+        cache_write: int = 0,
+    ) -> None:
+        cost = self.pricing.cost(
+            process["agent_model"],
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read=cache_read,
+            cache_write=cache_write,
+        )
+        usage = self.store.add_usage(
+            run_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read=cache_read,
+            cache_write=cache_write,
+            cost_usd=cost,
+            model=process["agent_model"],
+        )
+        await self._publish(run_id, "usage", usage)
+
+    async def _log(self, run_id: str, level: str, message: str, raw_json: dict[str, Any] | None = None) -> None:
+        row = self.store.add_log(run_id, level, message, raw_json)
+        await self._publish(run_id, "log", row)
+
+    async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        await self.hub.publish(run_id, {"type": event_type, "payload": payload})
+
+
+class AgentAdapter:
+    async def run(
+        self,
+        engine: ExecutionEngine,
+        run: dict[str, Any],
+        process: dict[str, Any],
+        *,
+        resume: bool,
+        feedback_text: str,
+    ) -> AgentResult:
+        raise NotImplementedError
+
+
+class MockAgentAdapter(AgentAdapter):
+    async def run(
+        self,
+        engine: ExecutionEngine,
+        run: dict[str, Any],
+        process: dict[str, Any],
+        *,
+        resume: bool,
+        feedback_text: str,
+    ) -> AgentResult:
+        await engine._log(run["id"], "info", "Claude command was unavailable; using local mock adapter")
+        await asyncio.sleep(0.05)
+        workdir = Path(run["workdir_path"])
+        output_yaml = workdir / "output" / "output.yaml"
+        data = yaml.safe_load(output_yaml.read_text(encoding="utf-8")) or {"output": []}
+        for item in data.get("output", []):
+            name = item.get("name") or item.get("id") or "artifact"
+            if item.get("type") == "file":
+                rel = item.get("path") or f"output/{safe_name(name)}.md"
+                target = workdir / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"# {name}\n\nGenerated by the local mock adapter.\n", encoding="utf-8")
+                item["path"] = rel
+            elif item.get("type") == "url":
+                item["url"] = item.get("url") or f"https://example.invalid/{safe_name(name)}"
+            else:
+                item["text"] = item.get("text") or f"Generated by the local mock adapter for {name}."
+        output_yaml.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        await engine.record_usage(run["id"], process, input_tokens=1200, output_tokens=450)
+        return AgentResult(ok=True, submitted=True, session_id=run.get("session_id") or f"mock-{run['id']}")
+
+
+class ClaudeCodeAdapter(AgentAdapter):
+    def __init__(self, command: list[str]):
+        self.command = command
+
+    async def run(
+        self,
+        engine: ExecutionEngine,
+        run: dict[str, Any],
+        process: dict[str, Any],
+        *,
+        resume: bool,
+        feedback_text: str,
+    ) -> AgentResult:
+        command = self._command_for_process(process)
+        if resume and run.get("session_id"):
+            command.extend(["--resume", run["session_id"]])
+        env = os.environ.copy()
+        env.update(
+            {
+                "ORCH_API_BASE": engine.settings.api_base,
+                "ORCH_RUN_ID": run["id"],
+                "ORCH_TOKEN": engine.settings.api_token,
+                "ORCH_QA_TIMEOUT_SECONDS": str(engine.settings.qa_timeout_seconds),
+            }
+        )
+        prompt = self._prompt(resume, feedback_text)
+        process_handle = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=run["workdir_path"],
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        engine.register_process(run["id"], process_handle)
+        assert process_handle.stdin is not None
+        assert process_handle.stdout is not None
+        try:
+            process_handle.stdin.write(prompt.encode("utf-8"))
+            await process_handle.stdin.drain()
+            process_handle.stdin.close()
+
+            session_id = run.get("session_id")
+            last_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0}
+            async for raw_line in process_handle.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if not line:
+                    continue
+                parsed = self._parse_event(line)
+                if parsed.get("session_id"):
+                    session_id = parsed["session_id"]
+                if parsed.get("usage"):
+                    usage = parsed["usage"]
+                    current_usage = self._normalize_usage(usage)
+                    delta_usage = {
+                        key: max(0, current_usage[key] - last_usage[key])
+                        for key in last_usage
+                    }
+                    last_usage = {
+                        key: max(last_usage[key], current_usage[key])
+                        for key in last_usage
+                    }
+                    if not any(delta_usage.values()):
+                        continue
+                    await engine.record_usage(
+                        run["id"],
+                        process,
+                        input_tokens=delta_usage["input_tokens"],
+                        output_tokens=delta_usage["output_tokens"],
+                        cache_read=delta_usage["cache_read"],
+                        cache_write=delta_usage["cache_write"],
+                    )
+                await engine._log(run["id"], "info", parsed.get("message") or line, parsed.get("raw"))
+            returncode = await process_handle.wait()
+            if returncode != 0:
+                return AgentResult(ok=False, session_id=session_id, error=f"Claude command exited with {returncode}")
+            return AgentResult(ok=True, session_id=session_id)
+        finally:
+            engine.unregister_process(run["id"], process_handle)
+
+    def _command_for_process(self, process: dict[str, Any]) -> list[str]:
+        command = list(self.command)
+        if "--model" not in command and "-m" not in command:
+            command.extend(["--model", process["agent_model"]])
+        return command
+
+    def _normalize_usage(self, usage: dict[str, Any]) -> dict[str, int]:
+        return {
+            "input_tokens": int(usage.get("input_tokens", 0)),
+            "output_tokens": int(usage.get("output_tokens", 0)),
+            "cache_read": int(usage.get("cache_read_input_tokens", usage.get("cache_read", 0))),
+            "cache_write": int(usage.get("cache_creation_input_tokens", usage.get("cache_write", 0))),
+        }
+
+    def _prompt(self, resume: bool, feedback_text: str) -> str:
+        base = (
+            "Read AGENTS.md and Goal.md in the current directory. "
+            "Complete output/output.yaml and any referenced output files. "
+            "Use utils/question.py for questions and utils/submit.py when ready for human review.\n"
+        )
+        if resume and feedback_text:
+            return f"{base}\nHuman review feedback:\n{feedback_text}\n"
+        return base
+
+    def _parse_event(self, line: str) -> dict[str, Any]:
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            return {"message": line, "raw": {"line": line}}
+        message = data.get("message")
+        if isinstance(message, dict):
+            text_blocks = message.get("content") or []
+            if isinstance(text_blocks, list):
+                text = " ".join(block.get("text", "") for block in text_blocks if isinstance(block, dict))
+                message = text or data.get("type")
+        usage = data.get("usage")
+        if not usage and isinstance(data.get("message"), dict):
+            usage = data["message"].get("usage")
+        return {
+            "message": str(message or data.get("type") or data),
+            "usage": usage,
+            "session_id": data.get("session_id") or data.get("sessionId"),
+            "raw": data,
+        }

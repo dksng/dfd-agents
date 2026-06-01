@@ -1,0 +1,9 @@
+.orch/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
