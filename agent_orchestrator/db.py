@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS process (
     type TEXT NOT NULL,
     agent_kind TEXT NOT NULL DEFAULT 'claude',
     agent_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+    agent_effort TEXT NOT NULL DEFAULT 'medium',
     goal_md TEXT NOT NULL DEFAULT '',
     template_id TEXT NOT NULL DEFAULT 'base',
     agents_md_append TEXT NOT NULL DEFAULT '',
@@ -181,7 +182,13 @@ class Store:
             if self._schema_needs_reset(conn):
                 self._reset_schema(conn)
             conn.executescript(SCHEMA)
+            self._apply_additive_migrations(conn)
             conn.execute("PRAGMA user_version = 2")
+
+    def _apply_additive_migrations(self, conn: sqlite3.Connection) -> None:
+        """Add new nullable/defaulted columns to existing tables without a full reset."""
+        if "agent_effort" not in self._table_columns(conn, "process"):
+            conn.execute("ALTER TABLE process ADD COLUMN agent_effort TEXT NOT NULL DEFAULT 'medium'")
 
     def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
         return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -389,6 +396,7 @@ class Store:
             "type",
             "agent_kind",
             "agent_model",
+            "agent_effort",
             "goal_md",
             "template_id",
             "agents_md_append",

@@ -1,5 +1,13 @@
 export type ArtifactType = "file" | "url" | "text";
 
+export interface HealthInfo {
+  status: string;
+  agent_mode: string;
+  claude_available: boolean;
+  active_adapter: "mock" | "claude";
+  claude_command: string;
+}
+
 export interface SkillSelection {
   skill_name: string;
   skill_source: "local" | "git";
@@ -21,6 +29,7 @@ export interface ProcessNode {
   type: string;
   agent_kind: string;
   agent_model: string;
+  agent_effort: string;
   goal_md: string;
   template_id: string;
   agents_md_append: string;

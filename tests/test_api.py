@@ -111,6 +111,50 @@ def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
     assert cost == 110.25
 
 
+def test_command_includes_model_and_effort() -> None:
+    adapter = ClaudeCodeAdapter(["claude", "--print"])
+    command = adapter._command_for_process(
+        {"agent_model": "claude-opus-4-8", "agent_effort": "high"}
+    )
+    assert command[command.index("--model") + 1] == "claude-opus-4-8"
+    assert command[command.index("--effort") + 1] == "high"
+
+
+def test_command_omits_effort_when_empty() -> None:
+    adapter = ClaudeCodeAdapter(["claude"])
+    command = adapter._command_for_process({"agent_model": "claude-sonnet-4-5", "agent_effort": ""})
+    assert "--effort" not in command
+
+
+def test_process_effort_persists(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "effort"}).json()
+        process = client.post(
+            f"/api/workflows/{workflow['id']}/processes",
+            json={"name": "Impl", "type": "implement"},
+        ).json()
+        updated = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"agent_model": "claude-opus-4-8", "agent_effort": "high"},
+        ).json()
+        assert updated["agent_model"] == "claude-opus-4-8"
+        assert updated["agent_effort"] == "high"
+
+
+def test_health_reports_active_adapter(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        health = client.get("/api/health").json()
+        assert health["status"] == "ok"
+        assert health["active_adapter"] == "mock"
+        assert "agent_mode" in health
+
+
+def test_agents_base_returns_template(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        body = client.get("/api/templates/base/agents-base").json()
+        assert "Goal.md" in body["content"]
+
+
 def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> None:
     adapter = ClaudeCodeAdapter(["claude"])
     seen: set[str] = set()

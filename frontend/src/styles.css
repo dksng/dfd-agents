@@ -528,3 +528,46 @@ textarea {
 .workflow-edge {
   stroke-width: 2;
 }
+
+.workflow-name {
+  min-width: 180px;
+  max-width: 280px;
+}
+
+.warn-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  color: #92400e;
+  font-size: 13px;
+}
+
+.agents-base {
+  margin: 4px 0 8px;
+  font-size: 13px;
+}
+
+.agents-base summary {
+  cursor: pointer;
+  color: #475569;
+  user-select: none;
+}
+
+.readonly-pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+}

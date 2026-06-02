@@ -199,6 +199,18 @@ class ExecutionEngine:
             return MockAgentAdapter()
         return ClaudeCodeAdapter(command)
 
+    def describe_adapter(self) -> dict[str, Any]:
+        mode = self.settings.agent_mode.lower()
+        command = shlex.split(self.settings.claude_command)
+        claude_available = bool(command and shutil.which(command[0]))
+        active = "mock" if (mode == "mock" or (mode == "auto" and not claude_available)) else "claude"
+        return {
+            "agent_mode": mode,
+            "claude_available": claude_available,
+            "active_adapter": active,
+            "claude_command": self.settings.claude_command,
+        }
+
     def _read_output_values(self, run: dict[str, Any]) -> list[dict[str, Any]]:
         workdir = Path(run["workdir_path"])
         output_yaml = workdir / "output" / "output.yaml"
@@ -407,6 +419,9 @@ class ClaudeCodeAdapter(AgentAdapter):
         command = list(self.command)
         if "--model" not in command and "-m" not in command:
             command.extend(["--model", process["agent_model"]])
+        effort = (process.get("agent_effort") or "").strip()
+        if effort and "--effort" not in command:
+            command.extend(["--effort", effort])
         return command
 
     def _normalize_usage(self, usage: dict[str, Any]) -> dict[str, int]:

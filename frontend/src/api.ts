@@ -1,6 +1,7 @@
 import type {
   ArtifactNode,
   CostSummary,
+  HealthInfo,
   ProcessNode,
   RunDetail,
   SkillCandidate,
@@ -97,7 +98,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action, feedback_text })
     }),
-  workflowCost: (id: string) => request<CostSummary>(`/api/workflows/${id}/cost`)
+  workflowCost: (id: string) => request<CostSummary>(`/api/workflows/${id}/cost`),
+  getHealth: () => request<HealthInfo>("/api/health"),
+  getAgentsBase: (templateId: string) =>
+    request<{ template_id: string; content: string }>(
+      `/api/templates/${templateId}/agents-base`
+    )
 };
 
 export function wsUrl(runId: string): string {

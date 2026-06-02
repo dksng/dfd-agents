@@ -1,4 +1,5 @@
 import {
+  applyNodeChanges,
   Background,
   Controls,
   Handle,
@@ -7,7 +8,8 @@ import {
   ReactFlow,
   type Connection,
   type Edge,
-  type Node
+  type Node,
+  type NodeChange
 } from "@xyflow/react";
 import {
   Check,
@@ -30,6 +32,7 @@ import type {
   ArtifactType,
   ArtifactValue,
   CostSummary,
+  HealthInfo,
   ProcessNode,
   RunDetail,
   SkillCandidate,
@@ -169,6 +172,51 @@ function artifactSpecText(artifact: ArtifactNode | null, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+const MODEL_OPTIONS = [
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5"
+];
+
+const EFFORT_OPTIONS = ["low", "medium", "high"];
+
+// Goal.md は表示名 `{artifact name}` で編集・保存する。
+// 旧形式の `{{artifact:<id>}}` トークンは読み込み時に表示名へ正規化する。
+function normalizeGoalForDisplay(goal: string, artifacts: ArtifactNode[]): string {
+  return goal.replace(/\{\{artifact:([^}]+)\}\}/g, (_match, id: string) => {
+    const artifact = artifacts.find((item) => item.id === id);
+    return artifact ? `{${artifact.name}}` : `{${id}}`;
+  });
+}
+
+// autosave / 明示保存で送るペイロード（位置はドラッグ側で別途保存するため含めない）。
+function processPayload(draft: ProcessNode): Record<string, unknown> {
+  return {
+    name: draft.name,
+    type: draft.type,
+    agent_kind: draft.agent_kind,
+    agent_model: draft.agent_model,
+    agent_effort: draft.agent_effort,
+    goal_md: draft.goal_md,
+    template_id: draft.template_id,
+    agents_md_append: draft.agents_md_append,
+    execution_mode: draft.execution_mode,
+    skills: draft.skills
+  };
+}
+
+function artifactPayload(draft: ArtifactNode): Record<string, unknown> {
+  return {
+    name: draft.name,
+    type: draft.type,
+    source_text: draft.source_text ?? null,
+    source_url: draft.source_url ?? null,
+    source_file_path: draft.source_file_path ?? null,
+    spec_json: draft.spec_json ?? {}
+  };
+}
+
 export function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
@@ -190,8 +238,14 @@ export function App() {
   const [diffText, setDiffText] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const [goalCursor, setGoalCursor] = useState(0);
+  const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [agentsBase, setAgentsBase] = useState("");
+  const [workflowNameDraft, setWorkflowNameDraft] = useState("");
+  const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const goalRef = useRef<HTMLTextAreaElement | null>(null);
   const workflowIdRef = useRef<string | null>(null);
+  const savedProcessRef = useRef<string>("");
+  const savedArtifactRef = useRef<string>("");
 
   const loadWorkflow = useCallback(async (id: string) => {
     const data = await api.getWorkflow(id);
@@ -222,6 +276,7 @@ export function App() {
       setSelectedProcessId(full.processes[0]?.id ?? "");
       const skillResponse = await api.listSkills(false);
       setSkills(skillResponse.skills);
+      api.getHealth().then(setHealth).catch(() => undefined);
     } catch (exc) {
       setError(String(exc));
     }
@@ -233,7 +288,8 @@ export function App() {
 
   useEffect(() => {
     workflowIdRef.current = workflow?.id ?? null;
-  }, [workflow?.id]);
+    setWorkflowNameDraft(workflow?.name ?? "");
+  }, [workflow?.id, workflow?.name]);
 
   const selectedProcess = useMemo(
     () => workflow?.processes.find((process) => process.id === selectedProcessId) ?? null,
@@ -250,22 +306,108 @@ export function App() {
     [workflow]
   );
 
+  // 選択した工程が「変わったとき」だけドラフトを読み込む（id をキーに）。
+  // workflow の再取得（autosave/コストポーリング）では再読込しないので入力中も消えない。
   useEffect(() => {
-    setProcessDraft(selectedProcess ? structuredClone(selectedProcess) : null);
-    const latestRun = selectedProcess?.runs?.[0];
-    setDiffBaseId(selectedProcess?.runs?.[1]?.id ?? "");
-    setDiffTargetId(selectedProcess?.runs?.[0]?.id ?? "");
+    if (!selectedProcess) {
+      setProcessDraft(null);
+      savedProcessRef.current = "";
+      setAgentsBase("");
+      setSelectedRun(null);
+      return;
+    }
+    const draft = structuredClone(selectedProcess);
+    draft.goal_md = normalizeGoalForDisplay(draft.goal_md, workflow?.artifacts ?? []);
+    setProcessDraft(draft);
+    savedProcessRef.current = JSON.stringify(processPayload(draft));
+    setDiffBaseId(selectedProcess.runs?.[1]?.id ?? "");
+    setDiffTargetId(selectedProcess.runs?.[0]?.id ?? "");
     setDiffText("");
+    api.getAgentsBase(selectedProcess.template_id || "base").then((res) => setAgentsBase(res.content)).catch(() => setAgentsBase(""));
+    const latestRun = selectedProcess.runs?.[0];
     if (latestRun) {
       void api.getRun(latestRun.id).then(setSelectedRun).catch((exc) => setError(String(exc)));
     } else {
       setSelectedRun(null);
     }
-  }, [selectedProcess]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProcessId]);
 
   useEffect(() => {
-    setArtifactDraft(selectedArtifact ? structuredClone(selectedArtifact) : null);
-  }, [selectedArtifact]);
+    if (!selectedArtifact) {
+      setArtifactDraft(null);
+      savedArtifactRef.current = "";
+      return;
+    }
+    const draft = structuredClone(selectedArtifact);
+    setArtifactDraft(draft);
+    savedArtifactRef.current = JSON.stringify(artifactPayload(draft));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedArtifactId]);
+
+  // 工程ドラフトのデバウンス自動保存。
+  useEffect(() => {
+    if (!processDraft) {
+      return;
+    }
+    const serialized = JSON.stringify(processPayload(processDraft));
+    if (serialized === savedProcessRef.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void api
+        .updateProcessConfig(processDraft.id, processPayload(processDraft))
+        .then(() => {
+          savedProcessRef.current = serialized;
+          if (workflowIdRef.current) {
+            return loadWorkflow(workflowIdRef.current);
+          }
+        })
+        .catch((exc) => setError(String(exc)));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [processDraft, loadWorkflow]);
+
+  // 成果物ドラフトのデバウンス自動保存。
+  useEffect(() => {
+    if (!artifactDraft) {
+      return;
+    }
+    const serialized = JSON.stringify(artifactPayload(artifactDraft));
+    if (serialized === savedArtifactRef.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void api
+        .updateArtifact(artifactDraft.id, artifactPayload(artifactDraft))
+        .then(() => {
+          savedArtifactRef.current = serialized;
+          if (workflowIdRef.current) {
+            return loadWorkflow(workflowIdRef.current);
+          }
+        })
+        .catch((exc) => setError(String(exc)));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [artifactDraft, loadWorkflow]);
+
+  // ワークフロー名のデバウンス自動保存。
+  useEffect(() => {
+    if (!workflow || workflowNameDraft === workflow.name) {
+      return;
+    }
+    const id = workflow.id;
+    const timer = window.setTimeout(() => {
+      void api
+        .updateWorkflow(id, { name: workflowNameDraft })
+        .then(() => {
+          setWorkflows((items) => items.map((item) => (item.id === id ? { ...item, name: workflowNameDraft } : item)));
+          setWorkflow((current) => (current && current.id === id ? { ...current, name: workflowNameDraft } : current));
+        })
+        .catch((exc) => setError(String(exc)));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [workflowNameDraft, workflow]);
 
   useEffect(() => {
     if (!selectedRun?.id) {
@@ -334,7 +476,7 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [loadWorkflow, selectedRun?.id, selectedRun?.status, wsConnected]);
 
-  const nodes = useMemo<Node<FlowNodeData>[]>(
+  const computedNodes = useMemo<Node<FlowNodeData>[]>(
     () => {
       const producerByArtifact = new Map<string, string>();
       const consumersByArtifact = new Map<string, number>();
@@ -383,6 +525,16 @@ export function App() {
     },
     [selectArtifact, selectProcess, selectedArtifactId, selectedProcessId, workflow]
   );
+
+  // ReactFlow を制御コンポーネント化：computedNodes を同期しつつ、ドラッグ中の
+  // 位置変更は onNodesChange でローカル適用する（これが無いとドラッグで動かない）。
+  useEffect(() => {
+    setNodes(computedNodes);
+  }, [computedNodes]);
+
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    setNodes((current) => applyNodeChanges(changes, current) as Node<FlowNodeData>[]);
+  }, []);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -442,19 +594,8 @@ export function App() {
     if (!processDraft || !workflow) {
       return;
     }
-    const payload = {
-      name: processDraft.name,
-      type: processDraft.type,
-      agent_kind: processDraft.agent_kind,
-      agent_model: processDraft.agent_model,
-      goal_md: processDraft.goal_md,
-      template_id: processDraft.template_id,
-      agents_md_append: processDraft.agents_md_append,
-      execution_mode: processDraft.execution_mode,
-      pos_x: processDraft.pos_x,
-      pos_y: processDraft.pos_y,
-      skills: processDraft.skills
-    };
+    const payload = processPayload(processDraft);
+    savedProcessRef.current = JSON.stringify(payload);
     await api.updateProcessConfig(processDraft.id, payload);
     await loadWorkflow(workflow.id);
   }
@@ -463,16 +604,9 @@ export function App() {
     if (!artifactDraft || !workflow) {
       return;
     }
-    await api.updateArtifact(artifactDraft.id, {
-      name: artifactDraft.name,
-      type: artifactDraft.type,
-      pos_x: artifactDraft.pos_x,
-      pos_y: artifactDraft.pos_y,
-      source_text: artifactDraft.source_text ?? null,
-      source_url: artifactDraft.source_url ?? null,
-      source_file_path: artifactDraft.source_file_path ?? null,
-      spec_json: artifactDraft.spec_json ?? {}
-    });
+    const payload = artifactPayload(artifactDraft);
+    savedArtifactRef.current = JSON.stringify(payload);
+    await api.updateArtifact(artifactDraft.id, payload);
     await loadWorkflow(workflow.id);
   }
 
@@ -603,7 +737,7 @@ export function App() {
     }
     const before = processDraft.goal_md.slice(0, Math.max(goalCursor - 1, 0));
     const after = processDraft.goal_md.slice(goalCursor);
-    const token = `{{artifact:${artifact.id}}}`;
+    const token = `{${artifact.name}}`;
     const next = `${before}${token}${after}`;
     updateProcessDraft("goal_md", next);
     setSuggestOpen(false);
@@ -723,6 +857,13 @@ export function App() {
             </option>
           ))}
         </select>
+        <input
+          className="workflow-name"
+          value={workflowNameDraft}
+          onChange={(event) => setWorkflowNameDraft(event.target.value)}
+          placeholder="Workflow name"
+          title="Rename workflow"
+        />
         <button className="icon-text" onClick={() => void createWorkflow()}>
           <Plus size={16} />
           Workflow
@@ -733,6 +874,15 @@ export function App() {
           <strong>${(cost?.cost_usd ?? 0).toFixed(5)}</strong>
         </div>
       </header>
+
+      {health?.active_adapter === "mock" && (
+        <div className="warn-line">
+          <span>
+            Mock agent active (claude CLI not detected; runs complete instantly into review).
+            Set ORCH_AGENT_MODE=claude and ensure `claude` is on PATH for real execution.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="error-line">
@@ -820,6 +970,7 @@ export function App() {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
             onConnect={onConnect}
             onEdgeDoubleClick={(_, edge) => {
               if (workflow) {
@@ -875,10 +1026,37 @@ export function App() {
                   </select>
                 </label>
               </div>
-              <label>
-                Model
-                <input value={processDraft.agent_model} onChange={(event) => updateProcessDraft("agent_model", event.target.value)} />
-              </label>
+              <div className="two-col">
+                <label>
+                  Model
+                  <select
+                    value={processDraft.agent_model}
+                    onChange={(event) => updateProcessDraft("agent_model", event.target.value)}
+                  >
+                    {!MODEL_OPTIONS.includes(processDraft.agent_model) && (
+                      <option value={processDraft.agent_model}>{processDraft.agent_model}</option>
+                    )}
+                    {MODEL_OPTIONS.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Effort
+                  <select
+                    value={processDraft.agent_effort || "medium"}
+                    onChange={(event) => updateProcessDraft("agent_effort", event.target.value)}
+                  >
+                    {EFFORT_OPTIONS.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <div className="field-block">
                 <span>Skills</span>
@@ -927,6 +1105,11 @@ export function App() {
                   </div>
                 )}
               </div>
+
+              <details className="agents-base">
+                <summary>AGENTS.md (base template, read-only)</summary>
+                <pre className="readonly-pre">{agentsBase || "(empty)"}</pre>
+              </details>
 
               <label>
                 AGENTS.md Append

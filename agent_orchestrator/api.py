@@ -72,8 +72,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health(request: Request) -> dict:
+        return {"status": "ok", **request.app.state.engine.describe_adapter()}
+
+    @app.get("/api/templates/{template_id}/agents-base")
+    def agents_base(template_id: str, request: Request) -> dict[str, str]:
+        settings = request.app.state.settings
+        template = settings.template_root / template_id / "AGENTS.md"
+        if not template.exists():
+            template = settings.template_root / "base" / "AGENTS.md"
+        content = template.read_text(encoding="utf-8") if template.exists() else ""
+        return {"template_id": template_id, "content": content}
 
     @app.get("/api/workflows")
     def list_workflows(request: Request) -> list[dict]:
