@@ -1,14 +1,4 @@
 export type ArtifactType = "file" | "url" | "text";
-export type PortDirection = "in" | "out";
-
-export interface ArtifactPort {
-  id: string;
-  process_id: string;
-  direction: PortDirection;
-  artifact_name: string;
-  artifact_type: ArtifactType;
-  spec_json: Record<string, unknown>;
-}
 
 export interface SkillSelection {
   skill_name: string;
@@ -37,18 +27,29 @@ export interface ProcessNode {
   pos_x: number;
   pos_y: number;
   execution_mode: string;
-  ports: ArtifactPort[];
   skills: SkillSelection[];
   runs: RunSummary[];
+}
+
+export interface ArtifactNode {
+  id: string;
+  workflow_id: string;
+  name: string;
+  type: ArtifactType;
+  pos_x: number;
+  pos_y: number;
+  source_text?: string | null;
+  source_url?: string | null;
+  source_file_path?: string | null;
+  spec_json: Record<string, unknown>;
 }
 
 export interface WorkflowEdge {
   id: string;
   workflow_id: string;
-  from_process_id: string;
-  from_port_id: string;
-  to_process_id: string;
-  to_port_id: string;
+  kind: "produces" | "consumes";
+  process_id: string;
+  artifact_id: string;
 }
 
 export interface Workflow {
@@ -58,6 +59,7 @@ export interface Workflow {
   updated_at: string;
   layout_json: Record<string, unknown>;
   processes: ProcessNode[];
+  artifacts: ArtifactNode[];
   edges: WorkflowEdge[];
 }
 
@@ -117,7 +119,7 @@ export interface ReviewItem {
 export interface ArtifactValue {
   id: string;
   run_id: string;
-  port_id: string;
+  artifact_id: string;
   artifact_type: ArtifactType;
   file_path?: string | null;
   url?: string | null;
@@ -139,4 +141,3 @@ export interface CostSummary {
   cache_write: number;
   cost_usd: number;
 }
-

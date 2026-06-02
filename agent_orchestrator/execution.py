@@ -204,23 +204,25 @@ class ExecutionEngine:
         output_yaml = workdir / "output" / "output.yaml"
         data = yaml.safe_load(output_yaml.read_text(encoding="utf-8")) if output_yaml.exists() else {}
         items = data.get("output") or []
-        output_ports = [port for port in self.store.get_process(run["process_id"])["ports"] if port["direction"] == "out"]
-        ports_by_id = {port["id"]: port for port in output_ports}
-        ports_by_name = {port["artifact_name"]: port for port in output_ports}
+        output_artifacts = [
+            self.store.get_artifact(edge["artifact_id"])
+            for edge in self.store.get_edges_for_process(run["process_id"], "produces")
+        ]
+        artifacts_by_id = {artifact["id"]: artifact for artifact in output_artifacts}
+        artifacts_by_name = {artifact["name"]: artifact for artifact in output_artifacts}
         values: list[dict[str, Any]] = []
         for index, item in enumerate(items):
-            port = ports_by_id.get(item.get("id") or "") or ports_by_name.get(item.get("name") or "")
-            if port is None and index < len(output_ports):
-                port = output_ports[index]
-            if port is None:
+            artifact = artifacts_by_id.get(item.get("id") or "") or artifacts_by_name.get(item.get("name") or "")
+            if artifact is None and index < len(output_artifacts):
+                artifact = output_artifacts[index]
+            if artifact is None:
                 continue
-            port_id = port["id"]
             artifact_type = item.get("type")
             if artifact_type not in {"file", "url", "text"}:
-                artifact_type = port["artifact_type"]
-            value = {"port_id": port_id, "artifact_type": artifact_type}
+                artifact_type = artifact["type"]
+            value = {"artifact_id": artifact["id"], "artifact_type": artifact_type}
             if artifact_type == "file":
-                value["file_path"] = item.get("path") or f"output/{safe_name(item.get('name') or port['artifact_name'])}.md"
+                value["file_path"] = item.get("path") or f"output/{safe_name(item.get('name') or artifact['name'])}.md"
             elif artifact_type == "url":
                 value["url"] = item.get("url") or ""
             else:

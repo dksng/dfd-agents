@@ -5,7 +5,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ArtifactType = Literal["file", "url", "text"]
-PortDirection = Literal["in", "out"]
 ReviewAction = Literal["approve", "reject"]
 
 
@@ -16,14 +15,6 @@ class WorkflowCreate(BaseModel):
 class WorkflowUpdate(BaseModel):
     name: str | None = None
     layout_json: dict[str, Any] | None = None
-
-
-class ArtifactPortInput(BaseModel):
-    id: str | None = None
-    direction: PortDirection
-    artifact_name: str
-    artifact_type: ArtifactType = "text"
-    spec_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillSelection(BaseModel):
@@ -37,7 +28,6 @@ class ProcessCreate(BaseModel):
     type: str = "implement"
     pos_x: float = 120
     pos_y: float = 120
-    ports: list[ArtifactPortInput] = Field(default_factory=list)
 
 
 class ProcessConfigUpdate(BaseModel):
@@ -51,15 +41,35 @@ class ProcessConfigUpdate(BaseModel):
     execution_mode: str | None = None
     pos_x: float | None = None
     pos_y: float | None = None
-    ports: list[ArtifactPortInput] | None = None
     skills: list[SkillSelection] | None = None
 
 
+class ArtifactCreate(BaseModel):
+    name: str = "New Artifact"
+    type: ArtifactType = "text"
+    pos_x: float = 360
+    pos_y: float = 160
+    source_text: str | None = None
+    source_url: str | None = None
+    source_file_path: str | None = None
+    spec_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactUpdate(BaseModel):
+    name: str | None = None
+    type: ArtifactType | None = None
+    pos_x: float | None = None
+    pos_y: float | None = None
+    source_text: str | None = None
+    source_url: str | None = None
+    source_file_path: str | None = None
+    spec_json: dict[str, Any] | None = None
+
+
 class EdgeCreate(BaseModel):
-    from_process_id: str
-    from_port_id: str
-    to_process_id: str
-    to_port_id: str
+    kind: Literal["produces", "consumes"]
+    process_id: str
+    artifact_id: str
 
 
 class ResumeRequest(BaseModel):
@@ -81,4 +91,3 @@ class SubmitRequest(BaseModel):
 class ReviewRequest(BaseModel):
     action: ReviewAction
     feedback_text: str = ""
-

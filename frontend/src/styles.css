@@ -240,12 +240,19 @@ textarea {
 
 .flow-node {
   width: 250px;
-  min-height: 116px;
+  min-height: 108px;
   padding: 12px;
   border: 1px solid #b8c2cc;
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 8px 18px rgba(23, 32, 42, 0.08);
+}
+
+.artifact-node {
+  width: 220px;
+  min-height: 96px;
+  border-color: #9db7a6;
+  background: #fbfdfb;
 }
 
 .flow-node.selected {
@@ -255,7 +262,7 @@ textarea {
 
 .node-topline,
 .node-meta,
-.node-ports {
+.node-stats {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -274,21 +281,11 @@ textarea {
   font-size: 12px;
 }
 
-.node-ports {
-  align-items: flex-start;
+.node-stats {
   margin-top: 12px;
-  font-size: 11px;
   color: #52606d;
-}
-
-.node-ports div {
-  display: grid;
-  gap: 4px;
-  max-width: 105px;
-}
-
-.node-ports div:last-child {
-  text-align: right;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .status {
@@ -350,11 +347,6 @@ textarea {
   background: #eff6ff;
 }
 
-.ports-editor {
-  display: grid;
-  gap: 8px;
-}
-
 .skill-list {
   display: grid;
   gap: 6px;
@@ -396,13 +388,6 @@ textarea {
   color: #66788a;
   font-size: 11px;
   font-weight: 600;
-}
-
-.port-row {
-  display: grid;
-  grid-template-columns: 56px 1fr 76px 32px;
-  gap: 6px;
-  align-items: center;
 }
 
 .goal-box {

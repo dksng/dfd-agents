@@ -56,12 +56,16 @@ CREATE TABLE IF NOT EXISTS process (
     execution_mode TEXT NOT NULL DEFAULT 'manual'
 );
 
-CREATE TABLE IF NOT EXISTS artifact_port (
+CREATE TABLE IF NOT EXISTS artifact (
     id TEXT PRIMARY KEY,
-    process_id TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
-    direction TEXT NOT NULL CHECK(direction IN ('in','out')),
-    artifact_name TEXT NOT NULL,
-    artifact_type TEXT NOT NULL CHECK(artifact_type IN ('file','url','text')),
+    workflow_id TEXT NOT NULL REFERENCES workflow(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('file','url','text')),
+    pos_x REAL NOT NULL DEFAULT 360,
+    pos_y REAL NOT NULL DEFAULT 160,
+    source_text TEXT,
+    source_url TEXT,
+    source_file_path TEXT,
     spec_json TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -76,10 +80,9 @@ CREATE TABLE IF NOT EXISTS process_skill (
 CREATE TABLE IF NOT EXISTS edge (
     id TEXT PRIMARY KEY,
     workflow_id TEXT NOT NULL REFERENCES workflow(id) ON DELETE CASCADE,
-    from_process_id TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
-    from_port_id TEXT NOT NULL REFERENCES artifact_port(id) ON DELETE CASCADE,
-    to_process_id TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
-    to_port_id TEXT NOT NULL REFERENCES artifact_port(id) ON DELETE CASCADE
+    kind TEXT NOT NULL CHECK(kind IN ('produces','consumes')),
+    process_id TEXT NOT NULL REFERENCES process(id) ON DELETE CASCADE,
+    artifact_id TEXT NOT NULL REFERENCES artifact(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS run (
@@ -138,15 +141,20 @@ CREATE TABLE IF NOT EXISTS review (
 CREATE TABLE IF NOT EXISTS artifact_value (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
-    port_id TEXT NOT NULL REFERENCES artifact_port(id) ON DELETE CASCADE,
+    artifact_id TEXT NOT NULL REFERENCES artifact(id) ON DELETE CASCADE,
     artifact_type TEXT NOT NULL CHECK(artifact_type IN ('file','url','text')),
     file_path TEXT,
     url TEXT,
     text_value TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_edge_unique_input
-ON edge(workflow_id, to_port_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edge_unique_producer
+ON edge(workflow_id, artifact_id)
+WHERE kind = 'produces';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edge_unique_consumer
+ON edge(process_id, artifact_id, kind)
+WHERE kind = 'consumes';
 """
 
 
@@ -170,7 +178,49 @@ class Store:
 
     def init(self) -> None:
         with self.connect() as conn:
+            if self._schema_needs_reset(conn):
+                self._reset_schema(conn)
             conn.executescript(SCHEMA)
+            conn.execute("PRAGMA user_version = 2")
+
+    def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+    def _table_exists(self, conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+        return row is not None
+
+    def _schema_needs_reset(self, conn: sqlite3.Connection) -> bool:
+        if not self._table_exists(conn, "workflow"):
+            return False
+        if self._table_exists(conn, "artifact_port"):
+            return True
+        if self._table_exists(conn, "edge") and "kind" not in self._table_columns(conn, "edge"):
+            return True
+        if self._table_exists(conn, "artifact_value") and "artifact_id" not in self._table_columns(conn, "artifact_value"):
+            return True
+        if not self._table_exists(conn, "artifact"):
+            return True
+        return False
+
+    def _reset_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for table in [
+            "artifact_value",
+            "review",
+            "qa",
+            "run_token_usage",
+            "run_log",
+            "run",
+            "edge",
+            "process_skill",
+            "artifact_port",
+            "artifact",
+            "process",
+            "workflow",
+        ]:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("PRAGMA foreign_keys = ON")
 
     def _fetchone(self, conn: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         row = conn.execute(sql, params).fetchone()
@@ -217,14 +267,10 @@ class Store:
                 raise KeyError(f"Workflow not found: {workflow_id}")
             processes = self._fetchall(conn, "SELECT * FROM process WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
             process_ids = [process["id"] for process in processes]
-            ports: dict[str, list[dict[str, Any]]] = {process_id: [] for process_id in process_ids}
             skills: dict[str, list[dict[str, Any]]] = {process_id: [] for process_id in process_ids}
             runs: dict[str, list[dict[str, Any]]] = {process_id: [] for process_id in process_ids}
             if process_ids:
                 placeholders = ",".join("?" for _ in process_ids)
-                for port in self._fetchall(conn, f"SELECT * FROM artifact_port WHERE process_id IN ({placeholders}) ORDER BY rowid", tuple(process_ids)):
-                    port["spec_json"] = _json_load(port.get("spec_json"), {})
-                    ports.setdefault(port["process_id"], []).append(port)
                 for skill in self._fetchall(conn, f"SELECT * FROM process_skill WHERE process_id IN ({placeholders}) ORDER BY skill_name", tuple(process_ids)):
                     skills.setdefault(skill["process_id"], []).append(skill)
                 for run in self._fetchall(
@@ -235,13 +281,16 @@ class Store:
                     run["input_snapshot_json"] = _json_load(run.get("input_snapshot_json"), {})
                     run["output_snapshot_json"] = _json_load(run.get("output_snapshot_json"), {})
                     runs.setdefault(run["process_id"], []).append(run)
+            artifacts = self._fetchall(conn, "SELECT * FROM artifact WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
+            for artifact in artifacts:
+                artifact["spec_json"] = _json_load(artifact.get("spec_json"), {})
             edges = self._fetchall(conn, "SELECT * FROM edge WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
         workflow["layout_json"] = _json_load(workflow.get("layout_json"), {})
         for process in processes:
-            process["ports"] = ports.get(process["id"], [])
             process["skills"] = skills.get(process["id"], [])
             process["runs"] = runs.get(process["id"], [])
         workflow["processes"] = processes
+        workflow["artifacts"] = artifacts
         workflow["edges"] = edges
         return workflow
 
@@ -250,11 +299,7 @@ class Store:
             process = self._fetchone(conn, "SELECT * FROM process WHERE id = ?", (process_id,))
             if not process:
                 raise KeyError(f"Process not found: {process_id}")
-            ports = self._fetchall(conn, "SELECT * FROM artifact_port WHERE process_id = ? ORDER BY rowid", (process_id,))
-            for port in ports:
-                port["spec_json"] = _json_load(port.get("spec_json"), {})
             skills = self._fetchall(conn, "SELECT * FROM process_skill WHERE process_id = ? ORDER BY skill_name", (process_id,))
-        process["ports"] = ports
         process["skills"] = skills
         return process
 
@@ -275,30 +320,68 @@ class Store:
                     data.get("pos_y", 120),
                 ),
             )
-            ports = data.get("ports") or [
-                {"direction": "in", "artifact_name": "input", "artifact_type": "text", "spec_json": {}},
-                {"direction": "out", "artifact_name": "output", "artifact_type": "text", "spec_json": {}},
-            ]
-            for port in ports:
-                conn.execute(
-                    """
-                    INSERT INTO artifact_port(id, process_id, direction, artifact_name, artifact_type, spec_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        port.get("id") or new_id("port"),
-                        process_id,
-                        port["direction"],
-                        port["artifact_name"],
-                        port.get("artifact_type", "text"),
-                        _json_dump(port.get("spec_json", {})),
-                    ),
-                )
         return self.get_process(process_id)
 
     def delete_process(self, process_id: str) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM process WHERE id = ?", (process_id,))
+
+    def create_artifact(self, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        artifact_id = new_id("artifact")
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifact(
+                    id, workflow_id, name, type, pos_x, pos_y,
+                    source_text, source_url, source_file_path, spec_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    workflow_id,
+                    data.get("name", "New Artifact"),
+                    data.get("type", "text"),
+                    data.get("pos_x", 360),
+                    data.get("pos_y", 160),
+                    data.get("source_text"),
+                    data.get("source_url"),
+                    data.get("source_file_path"),
+                    _json_dump(data.get("spec_json", {})),
+                ),
+            )
+        return self.get_artifact(artifact_id)
+
+    def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            artifact = self._fetchone(conn, "SELECT * FROM artifact WHERE id = ?", (artifact_id,))
+        if not artifact:
+            raise KeyError(f"Artifact not found: {artifact_id}")
+        artifact["spec_json"] = _json_load(artifact.get("spec_json"), {})
+        return artifact
+
+    def update_artifact(self, artifact_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "name",
+            "type",
+            "pos_x",
+            "pos_y",
+            "source_text",
+            "source_url",
+            "source_file_path",
+            "spec_json",
+        }
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if "spec_json" in updates:
+            updates["spec_json"] = _json_dump(updates["spec_json"] or {})
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            with self.connect() as conn:
+                conn.execute(f"UPDATE artifact SET {assignments} WHERE id = ?", (*updates.values(), artifact_id))
+        return self.get_artifact(artifact_id)
+
+    def delete_artifact(self, artifact_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM artifact WHERE id = ?", (artifact_id,))
 
     def update_process_config(self, process_id: str, data: dict[str, Any]) -> dict[str, Any]:
         allowed = {
@@ -318,38 +401,6 @@ class Store:
             if updates:
                 assignments = ", ".join(f"{key} = ?" for key in updates)
                 conn.execute(f"UPDATE process SET {assignments} WHERE id = ?", (*updates.values(), process_id))
-            if data.get("ports") is not None:
-                new_port_ids: list[str] = []
-                for port in data["ports"]:
-                    port_id = port.get("id") or new_id("port")
-                    new_port_ids.append(port_id)
-                    conn.execute(
-                        """
-                        INSERT INTO artifact_port(id, process_id, direction, artifact_name, artifact_type, spec_json)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            direction = excluded.direction,
-                            artifact_name = excluded.artifact_name,
-                            artifact_type = excluded.artifact_type,
-                            spec_json = excluded.spec_json
-                        """,
-                        (
-                            port_id,
-                            process_id,
-                            port["direction"],
-                            port["artifact_name"],
-                            port.get("artifact_type", "text"),
-                            _json_dump(port.get("spec_json", {})),
-                        ),
-                    )
-                if new_port_ids:
-                    placeholders = ",".join("?" for _ in new_port_ids)
-                    conn.execute(
-                        f"DELETE FROM artifact_port WHERE process_id = ? AND id NOT IN ({placeholders})",
-                        (process_id, *new_port_ids),
-                    )
-                else:
-                    conn.execute("DELETE FROM artifact_port WHERE process_id = ?", (process_id,))
             if data.get("skills") is not None:
                 conn.execute("DELETE FROM process_skill WHERE process_id = ?", (process_id,))
                 for skill in data["skills"]:
@@ -365,44 +416,36 @@ class Store:
     def create_edge(self, workflow_id: str, data: dict[str, Any]) -> dict[str, Any]:
         edge_id = new_id("edge")
         with self.connect() as conn:
-            from_process = self._fetchone(conn, "SELECT * FROM process WHERE id = ?", (data["from_process_id"],))
-            to_process = self._fetchone(conn, "SELECT * FROM process WHERE id = ?", (data["to_process_id"],))
-            if not from_process or not to_process:
-                raise ValueError("Both processes must exist")
-            if from_process["workflow_id"] != workflow_id or to_process["workflow_id"] != workflow_id:
-                raise ValueError("Edges can only connect processes in the same workflow")
-            if data["from_process_id"] == data["to_process_id"]:
-                raise ValueError("Self-loop edges are not allowed")
-            from_port = self._fetchone(conn, "SELECT * FROM artifact_port WHERE id = ?", (data["from_port_id"],))
-            to_port = self._fetchone(conn, "SELECT * FROM artifact_port WHERE id = ?", (data["to_port_id"],))
-            if not from_port or not to_port:
-                raise ValueError("Both ports must exist")
-            if from_port["process_id"] != data["from_process_id"] or to_port["process_id"] != data["to_process_id"]:
-                raise ValueError("Ports must belong to the connected processes")
-            if from_port["direction"] != "out" or to_port["direction"] != "in":
-                raise ValueError("Edges must connect an output port to an input port")
-            existing_input = self._fetchone(
+            kind = data["kind"]
+            process = self._fetchone(conn, "SELECT * FROM process WHERE id = ?", (data["process_id"],))
+            artifact = self._fetchone(conn, "SELECT * FROM artifact WHERE id = ?", (data["artifact_id"],))
+            if not process or not artifact:
+                raise ValueError("Process and artifact must exist")
+            if process["workflow_id"] != workflow_id or artifact["workflow_id"] != workflow_id:
+                raise ValueError("Edges can only connect nodes in the same workflow")
+            existing = self._fetchone(
                 conn,
-                "SELECT * FROM edge WHERE workflow_id = ? AND to_port_id = ?",
-                (workflow_id, data["to_port_id"]),
+                "SELECT * FROM edge WHERE workflow_id = ? AND kind = ? AND process_id = ? AND artifact_id = ?",
+                (workflow_id, kind, data["process_id"], data["artifact_id"]),
             )
-            if existing_input:
-                raise ValueError("Input port already has an upstream edge")
-            if self._would_create_cycle(conn, workflow_id, data["from_process_id"], data["to_process_id"]):
+            if existing:
+                raise ValueError("Edge already exists")
+            if kind == "produces":
+                producer = self._fetchone(
+                    conn,
+                    "SELECT * FROM edge WHERE workflow_id = ? AND kind = 'produces' AND artifact_id = ?",
+                    (workflow_id, data["artifact_id"]),
+                )
+                if producer:
+                    raise ValueError("Artifact already has a producer")
+            if self._would_create_cycle(conn, workflow_id, kind, data["process_id"], data["artifact_id"]):
                 raise ValueError("Edge would create a workflow cycle")
             conn.execute(
                 """
-                INSERT INTO edge(id, workflow_id, from_process_id, from_port_id, to_process_id, to_port_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO edge(id, workflow_id, kind, process_id, artifact_id)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (
-                    edge_id,
-                    workflow_id,
-                    data["from_process_id"],
-                    data["from_port_id"],
-                    data["to_process_id"],
-                    data["to_port_id"],
-                ),
+                (edge_id, workflow_id, kind, data["process_id"], data["artifact_id"]),
             )
             edge = self._fetchone(conn, "SELECT * FROM edge WHERE id = ?", (edge_id,))
         return edge
@@ -411,29 +454,44 @@ class Store:
         self,
         conn: sqlite3.Connection,
         workflow_id: str,
-        from_process_id: str,
-        to_process_id: str,
+        kind: str,
+        process_id: str,
+        artifact_id: str,
     ) -> bool:
-        adjacency: dict[str, list[str]] = {}
-        edges = self._fetchall(
-            conn,
-            "SELECT from_process_id, to_process_id FROM edge WHERE workflow_id = ?",
-            (workflow_id,),
-        )
+        edges = self._fetchall(conn, "SELECT kind, process_id, artifact_id FROM edge WHERE workflow_id = ?", (workflow_id,))
+        edges.append({"kind": kind, "process_id": process_id, "artifact_id": artifact_id})
+        producers: dict[str, str] = {}
+        consumers: dict[str, list[str]] = {}
         for edge in edges:
-            adjacency.setdefault(edge["from_process_id"], []).append(edge["to_process_id"])
-        adjacency.setdefault(from_process_id, []).append(to_process_id)
+            if edge["kind"] == "produces":
+                producers[edge["artifact_id"]] = edge["process_id"]
+            else:
+                consumers.setdefault(edge["artifact_id"], []).append(edge["process_id"])
 
-        stack = [to_process_id]
+        adjacency: dict[str, list[str]] = {}
+        for artifact, producer in producers.items():
+            for consumer in consumers.get(artifact, []):
+                adjacency.setdefault(producer, []).append(consumer)
+
         visited: set[str] = set()
-        while stack:
-            current = stack.pop()
-            if current == from_process_id:
+        active: set[str] = set()
+
+        def visit(process: str) -> bool:
+            if process in active:
                 return True
-            if current in visited:
-                continue
-            visited.add(current)
-            stack.extend(adjacency.get(current, []))
+            if process in visited:
+                return False
+            visited.add(process)
+            active.add(process)
+            for next_process in adjacency.get(process, []):
+                if visit(next_process):
+                    return True
+            active.remove(process)
+            return False
+
+        for process in list(adjacency):
+            if visit(process):
+                return True
         return False
 
     def delete_edge(self, edge_id: str) -> None:
@@ -522,18 +580,33 @@ class Store:
             return None
         return self.get_run(run["id"])
 
-    def get_workflow_edges_for_process(self, process_id: str) -> list[dict[str, Any]]:
+    def get_edges_for_process(self, process_id: str, kind: str | None = None) -> list[dict[str, Any]]:
         process = self.get_process(process_id)
+        params: list[Any] = [process["workflow_id"], process_id]
+        kind_clause = ""
+        if kind is not None:
+            kind_clause = " AND kind = ?"
+            params.append(kind)
         with self.connect() as conn:
-            return self._fetchall(conn, "SELECT * FROM edge WHERE workflow_id = ? AND to_process_id = ?", (process["workflow_id"], process_id))
+            return self._fetchall(
+                conn,
+                f"SELECT * FROM edge WHERE workflow_id = ? AND process_id = ?{kind_clause} ORDER BY rowid",
+                tuple(params),
+            )
 
-    def get_port(self, port_id: str) -> dict[str, Any]:
+    def get_edges_for_artifact(self, artifact_id: str, kind: str | None = None) -> list[dict[str, Any]]:
+        artifact = self.get_artifact(artifact_id)
+        params: list[Any] = [artifact["workflow_id"], artifact_id]
+        kind_clause = ""
+        if kind is not None:
+            kind_clause = " AND kind = ?"
+            params.append(kind)
         with self.connect() as conn:
-            port = self._fetchone(conn, "SELECT * FROM artifact_port WHERE id = ?", (port_id,))
-        if not port:
-            raise KeyError(f"Port not found: {port_id}")
-        port["spec_json"] = _json_load(port.get("spec_json"), {})
-        return port
+            return self._fetchall(
+                conn,
+                f"SELECT * FROM edge WHERE workflow_id = ? AND artifact_id = ?{kind_clause} ORDER BY rowid",
+                tuple(params),
+            )
 
     def add_log(self, run_id: str, level: str, message: str, raw_json: dict[str, Any] | None = None) -> dict[str, Any]:
         log_id = new_id("log")
@@ -651,7 +724,7 @@ class Store:
                 row = {
                     "id": new_id("av"),
                     "run_id": run_id,
-                    "port_id": value["port_id"],
+                    "artifact_id": value["artifact_id"],
                     "artifact_type": value["artifact_type"],
                     "file_path": value.get("file_path"),
                     "url": value.get("url"),
@@ -659,7 +732,7 @@ class Store:
                 }
                 conn.execute(
                     """
-                    INSERT INTO artifact_value(id, run_id, port_id, artifact_type, file_path, url, text_value)
+                    INSERT INTO artifact_value(id, run_id, artifact_id, artifact_type, file_path, url, text_value)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     tuple(row.values()),

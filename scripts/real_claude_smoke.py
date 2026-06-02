@@ -75,7 +75,18 @@ def run_smoke(base_url: str, model: str, *, with_qa: bool, answer: str) -> dict[
         f"/api/workflows/{workflow['id']}/processes",
         {"name": "Real Claude Smoke", "type": "implement"},
     )
-    output_port = next(port for port in process["ports"] if port["direction"] == "out")
+    artifact = request(
+        base_url,
+        "POST",
+        f"/api/workflows/{workflow['id']}/artifacts",
+        {"name": "smoke_result", "type": "text", "pos_x": 420, "pos_y": 120},
+    )
+    request(
+        base_url,
+        "POST",
+        f"/api/workflows/{workflow['id']}/edges",
+        {"kind": "produces", "process_id": process["id"], "artifact_id": artifact["id"]},
+    )
     goal = (
         "Do not ask questions. Complete the expected text output artifact. "
         "Set the output text value to exactly ORCH_REAL_CLAUDE_OK, preserve output.yaml ids, "
@@ -100,15 +111,6 @@ def run_smoke(base_url: str, model: str, *, with_qa: bool, answer: str) -> dict[
         {
             "agent_model": model,
             "goal_md": goal,
-            "ports": [
-                {
-                    "id": output_port["id"],
-                    "direction": "out",
-                    "artifact_name": "smoke_result",
-                    "artifact_type": "text",
-                    "spec_json": {},
-                }
-            ],
             "agents_md_append": append,
         },
     )

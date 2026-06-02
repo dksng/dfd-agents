@@ -12,20 +12,23 @@ import {
 import {
   Check,
   Download,
+  FileText,
+  Link,
   MessageSquare,
   Play,
   Plus,
   RefreshCw,
   Save,
   Trash2,
+  Type,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
 import type {
-  ArtifactValue,
-  ArtifactPort,
+  ArtifactNode,
   ArtifactType,
+  ArtifactValue,
   CostSummary,
   ProcessNode,
   RunDetail,
@@ -36,42 +39,45 @@ import type {
 type ProcessNodeData = {
   process: ProcessNode;
   selected: boolean;
+  inputCount: number;
+  outputCount: number;
   onSelect: (id: string) => void;
   onRun: (id: string) => void;
 };
+
+type ArtifactNodeData = {
+  artifact: ArtifactNode;
+  selected: boolean;
+  producerName?: string;
+  consumerCount: number;
+  onSelect: (id: string) => void;
+};
+
+type FlowNodeData = ProcessNodeData | ArtifactNodeData;
 
 function StatusPill({ status }: { status?: string }) {
   return <span className={`status ${status || "draft"}`}>{status || "draft"}</span>;
 }
 
-function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
-  const inputs = data.process.ports.filter((port) => port.direction === "in");
-  const outputs = data.process.ports.filter((port) => port.direction === "out");
-  const latest = data.process.runs?.[0];
+function ArtifactIcon({ type }: { type: ArtifactType }) {
+  if (type === "file") {
+    return <FileText size={16} />;
+  }
+  if (type === "url") {
+    return <Link size={16} />;
+  }
+  return <Type size={16} />;
+}
 
+function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
+  const latest = data.process.runs?.[0];
   return (
     <div
-      className={`flow-node ${data.selected ? "selected" : ""}`}
+      className={`flow-node process-node ${data.selected ? "selected" : ""}`}
       onClick={() => data.onSelect(data.process.id)}
     >
-      {inputs.map((port, index) => (
-        <Handle
-          key={port.id}
-          id={port.id}
-          type="target"
-          position={Position.Left}
-          style={{ top: `${28 + index * 22}px` }}
-        />
-      ))}
-      {outputs.map((port, index) => (
-        <Handle
-          key={port.id}
-          id={port.id}
-          type="source"
-          position={Position.Right}
-          style={{ top: `${28 + index * 22}px` }}
-        />
-      ))}
+      <Handle id="consumes" type="target" position={Position.Left} />
+      <Handle id="produces" type="source" position={Position.Right} />
       <div className="node-topline">
         <strong>{data.process.name}</strong>
         <button
@@ -89,34 +95,38 @@ function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
         <span>{data.process.type}</span>
         <StatusPill status={latest?.status} />
       </div>
-      <div className="node-ports">
-        <div>
-          {inputs.map((port) => (
-            <span key={port.id}>{port.artifact_name}</span>
-          ))}
-        </div>
-        <div>
-          {outputs.map((port) => (
-            <span key={port.id}>{port.artifact_name}</span>
-          ))}
-        </div>
+      <div className="node-stats">
+        <span>{data.inputCount} inputs</span>
+        <span>{data.outputCount} outputs</span>
       </div>
     </div>
   );
 }
 
-const nodeTypes = { process: ProcessFlowNode };
-
-function blankPort(direction: "in" | "out"): ArtifactPort {
-  return {
-    id: "",
-    process_id: "",
-    direction,
-    artifact_name: direction === "in" ? "input" : "output",
-    artifact_type: "text",
-    spec_json: {}
-  };
+function ArtifactFlowNode({ data }: { data: ArtifactNodeData }) {
+  return (
+    <div
+      className={`flow-node artifact-node ${data.selected ? "selected" : ""}`}
+      onClick={() => data.onSelect(data.artifact.id)}
+    >
+      <Handle id="produces" type="target" position={Position.Left} />
+      <Handle id="consumes" type="source" position={Position.Right} />
+      <div className="node-topline">
+        <strong>{data.artifact.name}</strong>
+        <ArtifactIcon type={data.artifact.type} />
+      </div>
+      <div className="node-meta">
+        <span>{data.artifact.type}</span>
+        <span>{data.producerName ?? "source"}</span>
+      </div>
+      <div className="node-stats">
+        <span>{data.consumerCount} consumers</span>
+      </div>
+    </div>
+  );
 }
+
+const nodeTypes = { process: ProcessFlowNode, artifact: ArtifactFlowNode };
 
 function totalUsage(run: RunDetail | null): CostSummary {
   return (run?.token_usage ?? []).reduce(
@@ -154,11 +164,18 @@ function simpleLineDiff(before: string, after: string): string {
   ].join("\n");
 }
 
+function artifactSpecText(artifact: ArtifactNode | null, key: string): string {
+  const value = artifact?.spec_json?.[key];
+  return typeof value === "string" ? value : "";
+}
+
 export function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [selectedProcessId, setSelectedProcessId] = useState<string>("");
-  const [draft, setDraft] = useState<ProcessNode | null>(null);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
+  const [processDraft, setProcessDraft] = useState<ProcessNode | null>(null);
+  const [artifactDraft, setArtifactDraft] = useState<ArtifactNode | null>(null);
   const [skills, setSkills] = useState<SkillCandidate[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
@@ -181,6 +198,16 @@ export function App() {
     setWorkflow(data);
     setCost(await api.workflowCost(id));
     return data;
+  }, []);
+
+  const selectProcess = useCallback((id: string) => {
+    setSelectedProcessId(id);
+    setSelectedArtifactId("");
+  }, []);
+
+  const selectArtifact = useCallback((id: string) => {
+    setSelectedArtifactId(id);
+    setSelectedProcessId("");
   }, []);
 
   const loadInitial = useCallback(async () => {
@@ -213,8 +240,18 @@ export function App() {
     [selectedProcessId, workflow]
   );
 
+  const selectedArtifact = useMemo(
+    () => workflow?.artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null,
+    [selectedArtifactId, workflow]
+  );
+
+  const artifactById = useMemo(
+    () => new Map((workflow?.artifacts ?? []).map((artifact) => [artifact.id, artifact])),
+    [workflow]
+  );
+
   useEffect(() => {
-    setDraft(selectedProcess ? structuredClone(selectedProcess) : null);
+    setProcessDraft(selectedProcess ? structuredClone(selectedProcess) : null);
     const latestRun = selectedProcess?.runs?.[0];
     setDiffBaseId(selectedProcess?.runs?.[1]?.id ?? "");
     setDiffTargetId(selectedProcess?.runs?.[0]?.id ?? "");
@@ -225,6 +262,10 @@ export function App() {
       setSelectedRun(null);
     }
   }, [selectedProcess]);
+
+  useEffect(() => {
+    setArtifactDraft(selectedArtifact ? structuredClone(selectedArtifact) : null);
+  }, [selectedArtifact]);
 
   useEffect(() => {
     if (!selectedRun?.id) {
@@ -293,35 +334,81 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [loadWorkflow, selectedRun?.id, selectedRun?.status, wsConnected]);
 
-  const nodes = useMemo<Node<ProcessNodeData>[]>(
-    () =>
-      (workflow?.processes ?? []).map((process) => ({
-        id: process.id,
-        type: "process",
-        position: { x: process.pos_x, y: process.pos_y },
-        data: {
-          process,
-          selected: process.id === selectedProcessId,
-          onSelect: setSelectedProcessId,
-          onRun: (id: string) => void runProcess(id)
+  const nodes = useMemo<Node<FlowNodeData>[]>(
+    () => {
+      const producerByArtifact = new Map<string, string>();
+      const consumersByArtifact = new Map<string, number>();
+      const inputCountByProcess = new Map<string, number>();
+      const outputCountByProcess = new Map<string, number>();
+      for (const edge of workflow?.edges ?? []) {
+        if (edge.kind === "produces") {
+          producerByArtifact.set(edge.artifact_id, edge.process_id);
+          outputCountByProcess.set(edge.process_id, (outputCountByProcess.get(edge.process_id) ?? 0) + 1);
+        } else {
+          consumersByArtifact.set(edge.artifact_id, (consumersByArtifact.get(edge.artifact_id) ?? 0) + 1);
+          inputCountByProcess.set(edge.process_id, (inputCountByProcess.get(edge.process_id) ?? 0) + 1);
         }
-      })),
-    [selectedProcessId, workflow]
+      }
+      const processNameById = new Map((workflow?.processes ?? []).map((process) => [process.id, process.name]));
+      return [
+        ...(workflow?.processes ?? []).map((process) => ({
+          id: process.id,
+          type: "process",
+          position: { x: process.pos_x, y: process.pos_y },
+          data: {
+            process,
+            selected: process.id === selectedProcessId,
+            inputCount: inputCountByProcess.get(process.id) ?? 0,
+            outputCount: outputCountByProcess.get(process.id) ?? 0,
+            onSelect: selectProcess,
+            onRun: (id: string) => void runProcess(id)
+          }
+        })),
+        ...(workflow?.artifacts ?? []).map((artifact) => {
+          const producerId = producerByArtifact.get(artifact.id);
+          return {
+            id: artifact.id,
+            type: "artifact",
+            position: { x: artifact.pos_x, y: artifact.pos_y },
+            data: {
+              artifact,
+              selected: artifact.id === selectedArtifactId,
+              producerName: producerId ? processNameById.get(producerId) : undefined,
+              consumerCount: consumersByArtifact.get(artifact.id) ?? 0,
+              onSelect: selectArtifact
+            }
+          };
+        })
+      ];
+    },
+    [selectArtifact, selectProcess, selectedArtifactId, selectedProcessId, workflow]
   );
 
   const edges = useMemo<Edge[]>(
     () =>
       (workflow?.edges ?? []).map((edge) => ({
         id: edge.id,
-        source: edge.from_process_id,
-        target: edge.to_process_id,
-        sourceHandle: edge.from_port_id,
-        targetHandle: edge.to_port_id,
+        source: edge.kind === "produces" ? edge.process_id : edge.artifact_id,
+        target: edge.kind === "produces" ? edge.artifact_id : edge.process_id,
+        sourceHandle: edge.kind === "produces" ? "produces" : "consumes",
+        targetHandle: edge.kind === "produces" ? "produces" : "consumes",
         markerEnd: { type: MarkerType.ArrowClosed },
-        className: "workflow-edge"
+        className: `workflow-edge ${edge.kind}`
       })),
     [workflow]
   );
+
+  const goalArtifacts = useMemo(() => {
+    if (!workflow || !processDraft) {
+      return [];
+    }
+    const connectedIds = new Set(
+      workflow.edges
+        .filter((edge) => edge.process_id === processDraft.id)
+        .map((edge) => edge.artifact_id)
+    );
+    return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
+  }, [processDraft?.id, workflow]);
 
   async function addProcess() {
     if (!workflow) {
@@ -330,38 +417,62 @@ export function App() {
     const created = await api.createProcess(workflow.id, {
       name: `Process ${workflow.processes.length + 1}`,
       type: "implement",
-      pos_x: 140 + workflow.processes.length * 40,
-      pos_y: 140 + workflow.processes.length * 36
+      pos_x: 140 + workflow.processes.length * 42,
+      pos_y: 140 + workflow.processes.length * 34
     });
     await loadWorkflow(workflow.id);
-    setSelectedProcessId(created.id);
+    selectProcess(created.id);
+  }
+
+  async function addArtifact(type: ArtifactType = "text") {
+    if (!workflow) {
+      return;
+    }
+    const created = await api.createArtifact(workflow.id, {
+      name: `Artifact ${workflow.artifacts.length + 1}`,
+      type,
+      pos_x: 460 + workflow.artifacts.length * 38,
+      pos_y: 160 + workflow.artifacts.length * 32
+    });
+    await loadWorkflow(workflow.id);
+    selectArtifact(created.id);
   }
 
   async function saveProcess() {
-    if (!draft || !workflow) {
+    if (!processDraft || !workflow) {
       return;
     }
     const payload = {
-      name: draft.name,
-      type: draft.type,
-      agent_kind: draft.agent_kind,
-      agent_model: draft.agent_model,
-      goal_md: draft.goal_md,
-      template_id: draft.template_id,
-      agents_md_append: draft.agents_md_append,
-      execution_mode: draft.execution_mode,
-      pos_x: draft.pos_x,
-      pos_y: draft.pos_y,
-      ports: draft.ports.map((port) => ({
-        id: port.id || undefined,
-        direction: port.direction,
-        artifact_name: port.artifact_name,
-        artifact_type: port.artifact_type,
-        spec_json: port.spec_json ?? {}
-      })),
-      skills: draft.skills
+      name: processDraft.name,
+      type: processDraft.type,
+      agent_kind: processDraft.agent_kind,
+      agent_model: processDraft.agent_model,
+      goal_md: processDraft.goal_md,
+      template_id: processDraft.template_id,
+      agents_md_append: processDraft.agents_md_append,
+      execution_mode: processDraft.execution_mode,
+      pos_x: processDraft.pos_x,
+      pos_y: processDraft.pos_y,
+      skills: processDraft.skills
     };
-    await api.updateProcessConfig(draft.id, payload);
+    await api.updateProcessConfig(processDraft.id, payload);
+    await loadWorkflow(workflow.id);
+  }
+
+  async function saveArtifact() {
+    if (!artifactDraft || !workflow) {
+      return;
+    }
+    await api.updateArtifact(artifactDraft.id, {
+      name: artifactDraft.name,
+      type: artifactDraft.type,
+      pos_x: artifactDraft.pos_x,
+      pos_y: artifactDraft.pos_y,
+      source_text: artifactDraft.source_text ?? null,
+      source_url: artifactDraft.source_url ?? null,
+      source_file_path: artifactDraft.source_file_path ?? null,
+      spec_json: artifactDraft.spec_json ?? {}
+    });
     await loadWorkflow(workflow.id);
   }
 
@@ -374,25 +485,48 @@ export function App() {
   }
 
   async function deleteSelectedProcess() {
-    if (!draft || !workflow) {
+    if (!processDraft || !workflow) {
       return;
     }
-    await api.deleteProcess(draft.id);
+    await api.deleteProcess(processDraft.id);
     setSelectedProcessId("");
+    await loadWorkflow(workflow.id);
+  }
+
+  async function deleteSelectedArtifact() {
+    if (!artifactDraft || !workflow) {
+      return;
+    }
+    await api.deleteArtifact(artifactDraft.id);
+    setSelectedArtifactId("");
     await loadWorkflow(workflow.id);
   }
 
   const onConnect = useCallback(
     async (connection: Connection) => {
-      if (!workflow || !connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
+      if (!workflow || !connection.source || !connection.target) {
         return;
       }
-      await api.createEdge(workflow.id, {
-        from_process_id: connection.source,
-        from_port_id: connection.sourceHandle,
-        to_process_id: connection.target,
-        to_port_id: connection.targetHandle
-      });
+      const sourceIsProcess = workflow.processes.some((process) => process.id === connection.source);
+      const targetIsProcess = workflow.processes.some((process) => process.id === connection.target);
+      const sourceIsArtifact = workflow.artifacts.some((artifact) => artifact.id === connection.source);
+      const targetIsArtifact = workflow.artifacts.some((artifact) => artifact.id === connection.target);
+      if (sourceIsProcess && targetIsArtifact) {
+        await api.createEdge(workflow.id, {
+          kind: "produces",
+          process_id: connection.source,
+          artifact_id: connection.target
+        });
+      } else if (sourceIsArtifact && targetIsProcess) {
+        await api.createEdge(workflow.id, {
+          kind: "consumes",
+          process_id: connection.target,
+          artifact_id: connection.source
+        });
+      } else {
+        setError("Connect process to artifact, or artifact to process.");
+        return;
+      }
       await loadWorkflow(workflow.id);
     },
     [loadWorkflow, workflow]
@@ -402,47 +536,38 @@ export function App() {
     if (!workflow) {
       return;
     }
-    await api.updateProcessConfig(nodeId, { pos_x: x, pos_y: y });
+    if (workflow.processes.some((process) => process.id === nodeId)) {
+      await api.updateProcessConfig(nodeId, { pos_x: x, pos_y: y });
+    } else if (workflow.artifacts.some((artifact) => artifact.id === nodeId)) {
+      await api.updateArtifact(nodeId, { pos_x: x, pos_y: y });
+    }
     await loadWorkflow(workflow.id);
   }
 
-  function updateDraft<K extends keyof ProcessNode>(key: K, value: ProcessNode[K]) {
-    setDraft((current) => (current ? { ...current, [key]: value } : current));
+  function updateProcessDraft<K extends keyof ProcessNode>(key: K, value: ProcessNode[K]) {
+    setProcessDraft((current) => (current ? { ...current, [key]: value } : current));
   }
 
-  function updatePort(index: number, patch: Partial<ArtifactPort>) {
-    setDraft((current) => {
-      if (!current) {
-        return current;
-      }
-      const ports = current.ports.map((port, portIndex) =>
-        portIndex === index ? { ...port, ...patch } : port
-      );
-      return { ...current, ports };
-    });
+  function updateArtifactDraft<K extends keyof ArtifactNode>(key: K, value: ArtifactNode[K]) {
+    setArtifactDraft((current) => (current ? { ...current, [key]: value } : current));
   }
 
-  function addPort(direction: "in" | "out") {
-    setDraft((current) =>
+  function updateArtifactSpec(key: string, value: string) {
+    setArtifactDraft((current) =>
       current
         ? {
             ...current,
-            ports: [...current.ports, { ...blankPort(direction), process_id: current.id }]
+            spec_json: {
+              ...(current.spec_json ?? {}),
+              [key]: value
+            }
           }
         : current
     );
   }
 
-  function removePort(index: number) {
-    setDraft((current) =>
-      current
-        ? { ...current, ports: current.ports.filter((_, portIndex) => portIndex !== index) }
-        : current
-    );
-  }
-
   function toggleSkill(skill: SkillCandidate, checked: boolean) {
-    setDraft((current) => {
+    setProcessDraft((current) => {
       if (!current) {
         return current;
       }
@@ -467,20 +592,20 @@ export function App() {
   }
 
   function onGoalChange(value: string, cursor: number) {
-    updateDraft("goal_md", value);
+    updateProcessDraft("goal_md", value);
     setGoalCursor(cursor);
     setSuggestOpen(cursor > 0 && value[cursor - 1] === "/");
   }
 
-  function insertArtifactToken(port: ArtifactPort) {
-    if (!draft) {
+  function insertArtifactToken(artifact: ArtifactNode) {
+    if (!processDraft) {
       return;
     }
-    const before = draft.goal_md.slice(0, Math.max(goalCursor - 1, 0));
-    const after = draft.goal_md.slice(goalCursor);
-    const token = `{{artifact:${port.id}}}`;
+    const before = processDraft.goal_md.slice(0, Math.max(goalCursor - 1, 0));
+    const after = processDraft.goal_md.slice(goalCursor);
+    const token = `{{artifact:${artifact.id}}}`;
     const next = `${before}${token}${after}`;
-    updateDraft("goal_md", next);
+    updateProcessDraft("goal_md", next);
     setSuggestOpen(false);
     window.setTimeout(() => {
       const position = before.length + token.length;
@@ -530,7 +655,7 @@ export function App() {
     if (artifact.artifact_type === "url") {
       return artifact.url ?? "";
     }
-    const response = await fetch(artifactDownloadUrl(run.id, artifact.port_id));
+    const response = await fetch(artifactDownloadUrl(run.id, artifact.artifact_id));
     if (!response.ok) {
       return `[download failed: ${response.status}]`;
     }
@@ -545,18 +670,17 @@ export function App() {
     setDiffLoading(true);
     try {
       const [base, target] = await Promise.all([api.getRun(diffBaseId), api.getRun(diffTargetId)]);
-      const portNames = new Map((selectedProcess?.ports ?? []).map((port) => [port.id, port.artifact_name]));
-      const portIds = Array.from(new Set([
-        ...base.artifacts.map((artifact) => artifact.port_id),
-        ...target.artifacts.map((artifact) => artifact.port_id)
+      const artifactIds = Array.from(new Set([
+        ...base.artifacts.map((artifact) => artifact.artifact_id),
+        ...target.artifacts.map((artifact) => artifact.artifact_id)
       ]));
       const sections: string[] = [];
-      for (const portId of portIds) {
-        const beforeArtifact = base.artifacts.find((artifact) => artifact.port_id === portId);
-        const afterArtifact = target.artifacts.find((artifact) => artifact.port_id === portId);
+      for (const artifactId of artifactIds) {
+        const beforeArtifact = base.artifacts.find((artifact) => artifact.artifact_id === artifactId);
+        const afterArtifact = target.artifacts.find((artifact) => artifact.artifact_id === artifactId);
         const before = beforeArtifact ? await artifactContent(base, beforeArtifact) : "";
         const after = afterArtifact ? await artifactContent(target, afterArtifact) : "";
-        sections.push(`## ${portNames.get(portId) ?? portId}\n${simpleLineDiff(before, after)}`);
+        sections.push(`## ${artifactById.get(artifactId)?.name ?? artifactId}\n${simpleLineDiff(before, after)}`);
       }
       setDiffText(sections.join("\n\n"));
     } catch (exc) {
@@ -566,9 +690,18 @@ export function App() {
     }
   }
 
+  async function createWorkflow() {
+    const created = await api.createWorkflow("New Workflow");
+    setWorkflows((items) => [created, ...items]);
+    const full = await loadWorkflow(created.id);
+    setSelectedProcessId(full.processes[0]?.id ?? "");
+    setSelectedArtifactId("");
+  }
+
   const usage = totalUsage(selectedRun);
   const pendingQA = selectedRun?.qa.find((item) => item.status === "pending");
   const currentReview = selectedRun?.reviews[selectedRun.reviews.length - 1];
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -581,6 +714,7 @@ export function App() {
           onChange={async (event) => {
             const full = await loadWorkflow(event.target.value);
             setSelectedProcessId(full.processes[0]?.id ?? "");
+            setSelectedArtifactId("");
           }}
         >
           {workflows.map((item) => (
@@ -589,10 +723,7 @@ export function App() {
             </option>
           ))}
         </select>
-        <button className="icon-text" onClick={() => void api.createWorkflow("New Workflow").then((wf) => {
-          setWorkflows((items) => [wf, ...items]);
-          return loadWorkflow(wf.id);
-        })}>
+        <button className="icon-text" onClick={() => void createWorkflow()}>
           <Plus size={16} />
           Workflow
         </button>
@@ -625,10 +756,37 @@ export function App() {
               <button
                 key={process.id}
                 className={`run-row ${process.id === selectedProcessId ? "active" : ""}`}
-                onClick={() => setSelectedProcessId(process.id)}
+                onClick={() => selectProcess(process.id)}
               >
                 <span>{process.name}</span>
                 <StatusPill status={process.runs[0]?.status} />
+              </button>
+            ))}
+          </div>
+
+          <div className="panel-title">
+            <strong>Artifacts</strong>
+            <div className="button-cluster">
+              <button className="icon-button" onClick={() => void addArtifact("text")} title="Add text artifact">
+                <Type size={15} />
+              </button>
+              <button className="icon-button" onClick={() => void addArtifact("file")} title="Add file artifact">
+                <FileText size={15} />
+              </button>
+              <button className="icon-button" onClick={() => void addArtifact("url")} title="Add URL artifact">
+                <Link size={15} />
+              </button>
+            </div>
+          </div>
+          <div className="run-list">
+            {(workflow?.artifacts ?? []).map((artifact) => (
+              <button
+                key={artifact.id}
+                className={`run-row ${artifact.id === selectedArtifactId ? "active" : ""}`}
+                onClick={() => selectArtifact(artifact.id)}
+              >
+                <span>{artifact.name}</span>
+                <ArtifactIcon type={artifact.type} />
               </button>
             ))}
           </div>
@@ -679,12 +837,12 @@ export function App() {
         </section>
 
         <aside className="right-panel">
-          {draft ? (
+          {processDraft && (
             <>
               <div className="panel-title">
                 <strong>Process</strong>
                 <div className="button-cluster">
-                  <button className="icon-button" title="Run" onClick={() => void runProcess(draft.id)}>
+                  <button className="icon-button" title="Run" onClick={() => void runProcess(processDraft.id)}>
                     <Play size={16} />
                   </button>
                   <button className="icon-button" title="Save" onClick={() => void saveProcess()}>
@@ -698,12 +856,12 @@ export function App() {
 
               <label>
                 Name
-                <input value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} />
+                <input value={processDraft.name} onChange={(event) => updateProcessDraft("name", event.target.value)} />
               </label>
               <div className="two-col">
                 <label>
                   Type
-                  <select value={draft.type} onChange={(event) => updateDraft("type", event.target.value)}>
+                  <select value={processDraft.type} onChange={(event) => updateProcessDraft("type", event.target.value)}>
                     <option value="design">design</option>
                     <option value="implement">implement</option>
                     <option value="evaluate">evaluate</option>
@@ -712,53 +870,22 @@ export function App() {
                 </label>
                 <label>
                   Agent
-                  <select value={draft.agent_kind} onChange={(event) => updateDraft("agent_kind", event.target.value)}>
+                  <select value={processDraft.agent_kind} onChange={(event) => updateProcessDraft("agent_kind", event.target.value)}>
                     <option value="claude">claude</option>
                   </select>
                 </label>
               </div>
               <label>
                 Model
-                <input value={draft.agent_model} onChange={(event) => updateDraft("agent_model", event.target.value)} />
+                <input value={processDraft.agent_model} onChange={(event) => updateProcessDraft("agent_model", event.target.value)} />
               </label>
-
-              <div className="panel-title compact">
-                <strong>Artifacts</strong>
-                <div className="button-cluster">
-                  <button className="icon-button" title="Add input" onClick={() => addPort("in")}>
-                    <Plus size={15} />
-                  </button>
-                  <button className="icon-button" title="Add output" onClick={() => addPort("out")}>
-                    <Download size={15} />
-                  </button>
-                </div>
-              </div>
-              <div className="ports-editor">
-                {draft.ports.map((port, index) => (
-                  <div className="port-row" key={`${port.id}-${index}`}>
-                    <select value={port.direction} onChange={(event) => updatePort(index, { direction: event.target.value as "in" | "out" })}>
-                      <option value="in">in</option>
-                      <option value="out">out</option>
-                    </select>
-                    <input value={port.artifact_name} onChange={(event) => updatePort(index, { artifact_name: event.target.value })} />
-                    <select value={port.artifact_type} onChange={(event) => updatePort(index, { artifact_type: event.target.value as ArtifactType })}>
-                      <option value="text">text</option>
-                      <option value="file">file</option>
-                      <option value="url">url</option>
-                    </select>
-                    <button className="icon-button" onClick={() => removePort(index)}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
 
               <div className="field-block">
                 <span>Skills</span>
                 <div className="skill-list">
                   {skills.length === 0 && <div className="muted-line">No skills found</div>}
                   {skills.map((skill) => {
-                    const checked = draft.skills.some(
+                    const checked = processDraft.skills.some(
                       (item) => `${item.skill_source}:${item.skill_ref}` === skillKey(skill)
                     );
                     return (
@@ -783,7 +910,7 @@ export function App() {
                   Goal.md
                   <textarea
                     ref={goalRef}
-                    value={draft.goal_md}
+                    value={processDraft.goal_md}
                     onChange={(event) => onGoalChange(event.target.value, event.target.selectionStart)}
                     onKeyUp={(event) => onGoalChange(event.currentTarget.value, event.currentTarget.selectionStart)}
                     rows={8}
@@ -791,11 +918,12 @@ export function App() {
                 </label>
                 {suggestOpen && (
                   <div className="suggest-list">
-                    {draft.ports.map((port) => (
-                      <button key={port.id || port.artifact_name} onClick={() => insertArtifactToken(port)}>
-                        {port.artifact_name}
+                    {goalArtifacts.map((artifact) => (
+                      <button key={artifact.id} onClick={() => insertArtifactToken(artifact)}>
+                        {artifact.name}
                       </button>
                     ))}
+                    {goalArtifacts.length === 0 && <div className="muted-line">No connected artifacts</div>}
                   </div>
                 )}
               </div>
@@ -803,15 +931,80 @@ export function App() {
               <label>
                 AGENTS.md Append
                 <textarea
-                  value={draft.agents_md_append}
-                  onChange={(event) => updateDraft("agents_md_append", event.target.value)}
+                  value={processDraft.agents_md_append}
+                  onChange={(event) => updateProcessDraft("agents_md_append", event.target.value)}
                   rows={5}
                 />
               </label>
             </>
-          ) : (
-            <div className="empty-panel">No process selected</div>
           )}
+
+          {artifactDraft && (
+            <>
+              <div className="panel-title">
+                <strong>Artifact</strong>
+                <div className="button-cluster">
+                  <button className="icon-button" title="Save" onClick={() => void saveArtifact()}>
+                    <Save size={16} />
+                  </button>
+                  <button className="icon-button danger" title="Delete" onClick={() => void deleteSelectedArtifact()}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+              <label>
+                Name
+                <input value={artifactDraft.name} onChange={(event) => updateArtifactDraft("name", event.target.value)} />
+              </label>
+              <label>
+                Type
+                <select value={artifactDraft.type} onChange={(event) => updateArtifactDraft("type", event.target.value as ArtifactType)}>
+                  <option value="text">text</option>
+                  <option value="file">file</option>
+                  <option value="url">url</option>
+                </select>
+              </label>
+              {artifactDraft.type === "text" && (
+                <label>
+                  Source Text
+                  <textarea
+                    value={artifactDraft.source_text ?? ""}
+                    onChange={(event) => updateArtifactDraft("source_text", event.target.value)}
+                    rows={7}
+                  />
+                </label>
+              )}
+              {artifactDraft.type === "url" && (
+                <label>
+                  Source URL
+                  <input
+                    value={artifactDraft.source_url ?? ""}
+                    onChange={(event) => updateArtifactDraft("source_url", event.target.value)}
+                  />
+                </label>
+              )}
+              {artifactDraft.type === "file" && (
+                <>
+                  <label>
+                    Source File Path
+                    <input
+                      value={artifactDraft.source_file_path ?? ""}
+                      onChange={(event) => updateArtifactDraft("source_file_path", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Expected Output Path
+                    <input
+                      value={artifactSpecText(artifactDraft, "path")}
+                      onChange={(event) => updateArtifactSpec("path", event.target.value)}
+                    />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+
+          {!processDraft && !artifactDraft && <div className="empty-panel">Select a process or artifact</div>}
         </aside>
       </main>
 
@@ -882,18 +1075,21 @@ export function App() {
               </button>
               {showArtifacts && (
                 <div className="artifact-list">
-                  {selectedRun.artifacts.map((artifact) => (
-                    <div key={artifact.id} className="artifact-row">
-                      <span>{artifact.port_id.slice(0, 12)}</span>
-                      {artifact.artifact_type === "file" && (
-                        <a href={`/api/runs/${selectedRun.id}/artifacts/${artifact.port_id}/download`}>
-                          {artifact.file_path}
-                        </a>
-                      )}
-                      {artifact.artifact_type === "url" && <a href={artifact.url ?? ""}>{artifact.url}</a>}
-                      {artifact.artifact_type === "text" && <textarea readOnly value={artifact.text_value ?? ""} rows={3} />}
-                    </div>
-                  ))}
+                  {selectedRun.artifacts.map((artifact) => {
+                    const label = artifactById.get(artifact.artifact_id)?.name ?? artifact.artifact_id.slice(0, 12);
+                    return (
+                      <div key={artifact.id} className="artifact-row">
+                        <span>{label}</span>
+                        {artifact.artifact_type === "file" && (
+                          <a href={artifactDownloadUrl(selectedRun.id, artifact.artifact_id)}>
+                            {artifact.file_path}
+                          </a>
+                        )}
+                        {artifact.artifact_type === "url" && <a href={artifact.url ?? ""}>{artifact.url}</a>}
+                        {artifact.artifact_type === "text" && <textarea readOnly value={artifact.text_value ?? ""} rows={3} />}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

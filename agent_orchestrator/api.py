@@ -13,6 +13,8 @@ from .db import Store
 from .events import EventHub
 from .execution import ExecutionEngine
 from .models import (
+    ArtifactCreate,
+    ArtifactUpdate,
     EdgeCreate,
     ProcessConfigUpdate,
     ProcessCreate,
@@ -109,6 +111,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/api/processes/{process_id}")
     def delete_process(process_id: str, request: Request) -> dict[str, bool]:
         request.app.state.store.delete_process(process_id)
+        return {"ok": True}
+
+    @app.post("/api/workflows/{workflow_id}/artifacts")
+    def create_artifact(workflow_id: str, payload: ArtifactCreate, request: Request) -> dict:
+        try:
+            return request.app.state.store.create_artifact(workflow_id, payload.model_dump())
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/artifacts/{artifact_id}")
+    def update_artifact(artifact_id: str, payload: ArtifactUpdate, request: Request) -> dict:
+        try:
+            return request.app.state.store.update_artifact(
+                artifact_id,
+                payload.model_dump(exclude_unset=True),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/artifacts/{artifact_id}")
+    def delete_artifact(artifact_id: str, request: Request) -> dict[str, bool]:
+        request.app.state.store.delete_artifact(artifact_id)
         return {"ok": True}
 
     @app.put("/api/processes/{process_id}/config")
@@ -211,10 +235,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.get("/api/runs/{run_id}/artifacts/{port_id}/download")
-    def download_artifact(run_id: str, port_id: str, request: Request) -> FileResponse:
+    @app.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
+    def download_artifact(run_id: str, artifact_id: str, request: Request) -> FileResponse:
         run = request.app.state.store.get_run(run_id)
-        artifact = next((item for item in run["artifacts"] if item["port_id"] == port_id), None)
+        artifact = next((item for item in run["artifacts"] if item["artifact_id"] == artifact_id), None)
         if not artifact or artifact["artifact_type"] != "file" or not artifact["file_path"]:
             raise HTTPException(status_code=404, detail="File artifact not found")
         workdir = Path(run["workdir_path"]).resolve()

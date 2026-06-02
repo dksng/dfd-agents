@@ -67,39 +67,37 @@ class WorkspaceBuilder:
         return {"input": inputs, "output": outputs, "workdir": str(workdir)}
 
     def _collect_inputs(self, process: dict[str, Any], workdir: Path) -> list[dict[str, Any]]:
-        incoming = self.store.get_workflow_edges_for_process(process["id"])
-        edge_by_to_port = {edge["to_port_id"]: edge for edge in incoming}
         values: list[dict[str, Any]] = []
-        for port in process["ports"]:
-            if port["direction"] != "in":
-                continue
-            edge = edge_by_to_port.get(port["id"])
-            artifact = self._port_default(port)
-            if edge:
-                upstream_run = self.store.latest_approved_run(edge["from_process_id"])
+        for edge in self.store.get_edges_for_process(process["id"], "consumes"):
+            artifact = self.store.get_artifact(edge["artifact_id"])
+            value = self._artifact_source_default(artifact, workdir)
+            producer = next(iter(self.store.get_edges_for_artifact(artifact["id"], "produces")), None)
+            if producer:
+                upstream_run = self.store.latest_approved_run(producer["process_id"])
                 if upstream_run:
                     upstream_value = next(
-                        (item for item in upstream_run["artifacts"] if item["port_id"] == edge["from_port_id"]),
+                        (item for item in upstream_run["artifacts"] if item["artifact_id"] == artifact["id"]),
                         None,
                     )
                     if upstream_value:
-                        artifact = self._input_from_upstream(port, upstream_run, upstream_value, workdir)
-            values.append(artifact)
+                        value = self._input_from_upstream(artifact, upstream_run, upstream_value, workdir)
+            values.append(value)
         return values
 
     def _input_from_upstream(
         self,
-        port: dict[str, Any],
+        artifact: dict[str, Any],
         upstream_run: dict[str, Any],
         upstream_value: dict[str, Any],
         workdir: Path,
     ) -> dict[str, Any]:
-        artifact_type = upstream_value["artifact_type"]
-        item = {"id": port["id"], "name": port["artifact_name"], "type": artifact_type}
+        artifact_type = upstream_value.get("artifact_type") or artifact["type"]
+        item = {"id": artifact["id"], "name": artifact["name"], "type": artifact_type}
         if artifact_type == "file":
             upstream_workdir = Path(upstream_run["workdir_path"]).resolve()
-            source = (upstream_workdir / upstream_value["file_path"]).resolve()
-            filename = safe_name(Path(upstream_value["file_path"] or port["artifact_name"]).name)
+            rel_path = upstream_value.get("file_path") or f"output/{safe_name(artifact['name'])}.md"
+            source = (upstream_workdir / rel_path).resolve()
+            filename = safe_name(Path(rel_path).name)
             target = workdir / "input" / filename
             if source.is_relative_to(upstream_workdir) and source.exists():
                 shutil.copy2(source, target)
@@ -112,27 +110,35 @@ class WorkspaceBuilder:
             item["text"] = upstream_value.get("text_value") or ""
         return item
 
-    def _port_default(self, port: dict[str, Any]) -> dict[str, Any]:
-        spec = port.get("spec_json") or {}
-        item = {"id": port["id"], "name": port["artifact_name"], "type": port["artifact_type"]}
-        if port["artifact_type"] == "file":
-            item["path"] = spec.get("path", f"input/{safe_name(port['artifact_name'])}")
-        elif port["artifact_type"] == "url":
-            item["url"] = spec.get("url", "")
+    def _artifact_source_default(self, artifact: dict[str, Any], workdir: Path) -> dict[str, Any]:
+        item = {"id": artifact["id"], "name": artifact["name"], "type": artifact["type"]}
+        if artifact["type"] == "file":
+            source_path = artifact.get("source_file_path") or ""
+            filename = safe_name(Path(source_path).name if source_path else artifact["name"])
+            target = workdir / "input" / filename
+            source = Path(source_path).expanduser() if source_path else None
+            if source and not source.is_absolute():
+                source = Path.cwd() / source
+            if source and source.exists() and source.is_file():
+                shutil.copy2(source, target)
+            else:
+                target.write_text("", encoding="utf-8")
+            item["path"] = f"input/{filename}"
+        elif artifact["type"] == "url":
+            item["url"] = artifact.get("source_url") or ""
         else:
-            item["text"] = spec.get("text", "")
+            item["text"] = artifact.get("source_text") or ""
         return item
 
     def _expected_outputs(self, process: dict[str, Any]) -> list[dict[str, Any]]:
         outputs: list[dict[str, Any]] = []
-        for port in process["ports"]:
-            if port["direction"] != "out":
-                continue
-            spec = port.get("spec_json") or {}
-            item = {"id": port["id"], "name": port["artifact_name"], "type": port["artifact_type"]}
-            if port["artifact_type"] == "file":
-                item["path"] = spec.get("path", f"output/{safe_name(port['artifact_name'])}.md")
-            elif port["artifact_type"] == "url":
+        for edge in self.store.get_edges_for_process(process["id"], "produces"):
+            artifact = self.store.get_artifact(edge["artifact_id"])
+            spec = artifact.get("spec_json") or {}
+            item = {"id": artifact["id"], "name": artifact["name"], "type": artifact["type"]}
+            if artifact["type"] == "file":
+                item["path"] = spec.get("path", f"output/{safe_name(artifact['name'])}.md")
+            elif artifact["type"] == "url":
                 item["url"] = spec.get("url", "")
             else:
                 item["text"] = spec.get("text", "")
@@ -152,8 +158,9 @@ class WorkspaceBuilder:
 
     def _resolve_goal(self, process: dict[str, Any]) -> str:
         goal = process.get("goal_md") or ""
-        for port in process["ports"]:
-            goal = goal.replace(f"{{{{artifact:{port['id']}}}}}", f"{{{port['artifact_name']}}}")
+        for edge in self.store.get_edges_for_process(process["id"]):
+            artifact = self.store.get_artifact(edge["artifact_id"])
+            goal = goal.replace(f"{{{{artifact:{artifact['id']}}}}}", f"{{{artifact['name']}}}")
         return goal
 
     def _copy_utils(self, workdir: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import yaml
 from fastapi.testclient import TestClient
@@ -43,7 +44,7 @@ def make_client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(settings))
 
 
-def wait_for_status(client: TestClient, run_id: str, statuses: set[str]) -> dict:
+def wait_for_status(client: TestClient, run_id: str, statuses: set[str]) -> dict[str, Any]:
     deadline = time.time() + 5
     while time.time() < deadline:
         run = client.get(f"/api/runs/{run_id}").json()
@@ -51,6 +52,51 @@ def wait_for_status(client: TestClient, run_id: str, statuses: set[str]) -> dict
             return run
         time.sleep(0.05)
     raise AssertionError(f"run {run_id} did not reach {statuses}")
+
+
+def create_process(client: TestClient, workflow_id: str, name: str, process_type: str = "implement") -> dict[str, Any]:
+    return client.post(
+        f"/api/workflows/{workflow_id}/processes",
+        json={"name": name, "type": process_type},
+    ).json()
+
+
+def create_artifact(
+    client: TestClient,
+    workflow_id: str,
+    name: str,
+    artifact_type: str = "text",
+    **extra: Any,
+) -> dict[str, Any]:
+    payload = {"name": name, "type": artifact_type, **extra}
+    return client.post(f"/api/workflows/{workflow_id}/artifacts", json=payload).json()
+
+
+def create_edge(
+    client: TestClient,
+    workflow_id: str,
+    kind: str,
+    process_id: str,
+    artifact_id: str,
+):
+    return client.post(
+        f"/api/workflows/{workflow_id}/edges",
+        json={"kind": kind, "process_id": process_id, "artifact_id": artifact_id},
+    )
+
+
+def attach_output(
+    client: TestClient,
+    workflow_id: str,
+    process: dict[str, Any],
+    name: str = "result",
+    artifact_type: str = "text",
+    **extra: Any,
+) -> dict[str, Any]:
+    artifact = create_artifact(client, workflow_id, name, artifact_type, **extra)
+    response = create_edge(client, workflow_id, "produces", process["id"], artifact["id"])
+    assert response.status_code == 200
+    return artifact
 
 
 def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
@@ -130,31 +176,23 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
 def test_workflow_run_review_and_cost(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "demo"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Implement", "type": "implement"},
-        ).json()
-
-        output_port = next(port for port in process["ports"] if port["direction"] == "out")
-        process = client.put(
+        process = create_process(client, workflow["id"], "Implement")
+        artifact = attach_output(
+            client,
+            workflow["id"],
+            process,
+            "implementation_notes",
+            "file",
+        )
+        client.put(
             f"/api/processes/{process['id']}/config",
-            json={
-                "goal_md": "Produce {{artifact:%s}}" % output_port["id"],
-                "ports": [
-                    {
-                        "id": output_port["id"],
-                        "direction": "out",
-                        "artifact_name": "implementation_notes",
-                        "artifact_type": "file",
-                        "spec_json": {},
-                    }
-                ],
-            },
-        ).json()
+            json={"goal_md": f"Produce {{artifact:{artifact['id']}}}"},
+        )
 
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review", "failed"})
         assert run["status"] == "in_review"
+        assert run["artifacts"][0]["artifact_id"] == artifact["id"]
         assert run["artifacts"][0]["artifact_type"] == "file"
         assert (Path(run["workdir_path"]) / run["artifacts"][0]["file_path"]).exists()
 
@@ -170,10 +208,8 @@ def test_workflow_run_review_and_cost(tmp_path: Path) -> None:
 def test_reject_marks_original_run_rejected_and_starts_child(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "review"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Reviewable", "type": "implement"},
-        ).json()
+        process = create_process(client, workflow["id"], "Reviewable")
+        attach_output(client, workflow["id"], process, "notes")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
 
@@ -192,10 +228,7 @@ def test_reject_marks_original_run_rejected_and_starts_child(tmp_path: Path) -> 
 def test_callback_endpoints_require_orch_token(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "qa"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Ask", "type": "design"},
-        ).json()
+        process = create_process(client, workflow["id"], "Ask", "design")
         run = client.post(f"/api/processes/{process['id']}/run").json()
 
         unauthorized = client.post(
@@ -215,51 +248,30 @@ def test_callback_endpoints_require_orch_token(tmp_path: Path) -> None:
 def test_download_rejects_paths_outside_workdir(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "download"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Producer", "type": "implement"},
-        ).json()
-        output_port = next(port for port in process["ports"] if port["direction"] == "out")
-        process = client.put(
-            f"/api/processes/{process['id']}/config",
-            json={
-                "ports": [
-                    {
-                        "id": output_port["id"],
-                        "direction": "out",
-                        "artifact_name": "notes",
-                        "artifact_type": "file",
-                        "spec_json": {},
-                    }
-                ],
-            },
-        ).json()
-        output_port = process["ports"][0]
+        process = create_process(client, workflow["id"], "Producer")
+        artifact = attach_output(client, workflow["id"], process, "notes", "file")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
         client.app.state.store.replace_artifact_values(
             run["id"],
             [
                 {
-                    "port_id": output_port["id"],
+                    "artifact_id": artifact["id"],
                     "artifact_type": "file",
                     "file_path": "../../README.md",
                 }
             ],
         )
 
-        response = client.get(f"/api/runs/{run['id']}/artifacts/{output_port['id']}/download")
+        response = client.get(f"/api/runs/{run['id']}/artifacts/{artifact['id']}/download")
         assert response.status_code == 403
 
 
 def test_submit_falls_back_to_output_name_when_id_is_changed(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "submit"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Producer", "type": "implement"},
-        ).json()
-        output_port = next(port for port in process["ports"] if port["direction"] == "out")
+        process = create_process(client, workflow["id"], "Producer")
+        artifact = attach_output(client, workflow["id"], process, "report")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
         output_yaml = Path(run["workdir_path"]) / "output" / "output.yaml"
@@ -269,7 +281,7 @@ def test_submit_falls_back_to_output_name_when_id_is_changed(tmp_path: Path) -> 
                     "output": [
                         {
                             "id": "rewritten",
-                            "name": output_port["artifact_name"],
+                            "name": artifact["name"],
                             "type": "text",
                             "text": "resolved by name",
                         }
@@ -284,17 +296,15 @@ def test_submit_falls_back_to_output_name_when_id_is_changed(tmp_path: Path) -> 
         submitted = client.post(f"/api/runs/{run['id']}/submit", json={}, headers=AUTH)
         assert submitted.status_code == 200
         refreshed = client.get(f"/api/runs/{run['id']}").json()
-        assert refreshed["artifacts"][0]["port_id"] == output_port["id"]
+        assert refreshed["artifacts"][0]["artifact_id"] == artifact["id"]
         assert refreshed["artifacts"][0]["text_value"] == "resolved by name"
 
 
 def test_submit_rejects_terminal_run_without_reopening_review(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "terminal"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Producer", "type": "implement"},
-        ).json()
+        process = create_process(client, workflow["id"], "Producer")
+        attach_output(client, workflow["id"], process, "result")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
         client.app.state.store.update_run(run["id"], status="failed")
@@ -305,13 +315,11 @@ def test_submit_rejects_terminal_run_without_reopening_review(tmp_path: Path) ->
         assert refreshed["status"] == "failed"
 
 
-def test_review_and_resume_reject_review_terminal_states(tmp_path: Path) -> None:
+def test_review_and_resume_reject_terminal_states(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "terminal-review"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Review", "type": "implement"},
-        ).json()
+        process = create_process(client, workflow["id"], "Review")
+        attach_output(client, workflow["id"], process, "result")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
         approved = client.post(f"/api/runs/{run['id']}/review", json={"action": "approve"}).json()
@@ -326,10 +334,8 @@ def test_review_and_resume_reject_review_terminal_states(tmp_path: Path) -> None
 def test_public_resume_only_allows_failed_runs(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "resume"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Resume", "type": "implement"},
-        ).json()
+        process = create_process(client, workflow["id"], "Resume")
+        attach_output(client, workflow["id"], process, "result")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
 
@@ -343,173 +349,98 @@ def test_public_resume_only_allows_failed_runs(tmp_path: Path) -> None:
         assert child["status"] == "in_review"
 
 
-def test_approved_upstream_artifact_is_injected(tmp_path: Path) -> None:
+def test_source_artifact_is_injected_without_producer(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "source"}).json()
+        consumer = create_process(client, workflow["id"], "Consumer")
+        source = create_artifact(
+            client,
+            workflow["id"],
+            "requirements",
+            "text",
+            source_text="source text from user",
+        )
+        assert create_edge(client, workflow["id"], "consumes", consumer["id"], source["id"]).status_code == 200
+
+        run = client.post(f"/api/processes/{consumer['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        input_yaml = Path(run["workdir_path"]) / "input" / "input.yaml"
+        data = yaml.safe_load(input_yaml.read_text(encoding="utf-8"))
+        assert data["input"][0]["id"] == source["id"]
+        assert data["input"][0]["text"] == "source text from user"
+
+
+def test_approved_upstream_artifact_is_injected_and_can_fan_out(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "pipeline"}).json()
-        producer = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Producer", "type": "design", "pos_x": 50, "pos_y": 80},
-        ).json()
-        consumer = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Consumer", "type": "implement", "pos_x": 420, "pos_y": 80},
-        ).json()
-        producer_out = next(port for port in producer["ports"] if port["direction"] == "out")
-        consumer_in = next(port for port in consumer["ports"] if port["direction"] == "in")
+        producer = create_process(client, workflow["id"], "Producer", "design")
+        first_consumer = create_process(client, workflow["id"], "First Consumer", "implement")
+        second_consumer = create_process(client, workflow["id"], "Second Consumer", "review")
+        artifact = attach_output(client, workflow["id"], producer, "design_notes")
+
+        assert create_edge(client, workflow["id"], "consumes", first_consumer["id"], artifact["id"]).status_code == 200
+        assert create_edge(client, workflow["id"], "consumes", second_consumer["id"], artifact["id"]).status_code == 200
 
         run = client.post(f"/api/processes/{producer['id']}/run").json()
         run = wait_for_status(client, run["id"], {"in_review"})
         client.post(f"/api/runs/{run['id']}/review", json={"action": "approve"})
 
-        edge = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": producer["id"],
-                "from_port_id": producer_out["id"],
-                "to_process_id": consumer["id"],
-                "to_port_id": consumer_in["id"],
-            },
-        )
-        assert edge.status_code == 200
-
-        consumer_run = client.post(f"/api/processes/{consumer['id']}/run").json()
+        consumer_run = client.post(f"/api/processes/{first_consumer['id']}/run").json()
         consumer_run = wait_for_status(client, consumer_run["id"], {"in_review"})
         input_yaml = Path(consumer_run["workdir_path"]) / "input" / "input.yaml"
         data = yaml.safe_load(input_yaml.read_text(encoding="utf-8"))
+        assert data["input"][0]["id"] == artifact["id"]
         assert data["input"][0]["text"].startswith("Generated by the local mock adapter")
 
 
-def test_edges_reject_self_loop_duplicate_input_and_cycles(tmp_path: Path) -> None:
+def test_edges_reject_self_loop_duplicate_producer_duplicate_consume_and_cycles(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "edges"}).json()
-        first = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "First", "type": "design"},
-        ).json()
-        second = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Second", "type": "implement"},
-        ).json()
-        third = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Third", "type": "evaluate"},
-        ).json()
+        first = create_process(client, workflow["id"], "First", "design")
+        second = create_process(client, workflow["id"], "Second", "implement")
+        third = create_process(client, workflow["id"], "Third", "evaluate")
+        first_artifact = create_artifact(client, workflow["id"], "first_output")
+        second_artifact = create_artifact(client, workflow["id"], "second_output")
+        third_artifact = create_artifact(client, workflow["id"], "third_output")
 
-        first_in = next(port for port in first["ports"] if port["direction"] == "in")
-        first_out = next(port for port in first["ports"] if port["direction"] == "out")
-        second_in = next(port for port in second["ports"] if port["direction"] == "in")
-        second_out = next(port for port in second["ports"] if port["direction"] == "out")
-        third_in = next(port for port in third["ports"] if port["direction"] == "in")
-        third_out = next(port for port in third["ports"] if port["direction"] == "out")
-
-        self_loop = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": first["id"],
-                "from_port_id": first_out["id"],
-                "to_process_id": first["id"],
-                "to_port_id": first_in["id"],
-            },
-        )
+        assert create_edge(client, workflow["id"], "produces", first["id"], first_artifact["id"]).status_code == 200
+        self_loop = create_edge(client, workflow["id"], "consumes", first["id"], first_artifact["id"])
         assert self_loop.status_code == 422
 
-        first_to_second = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": first["id"],
-                "from_port_id": first_out["id"],
-                "to_process_id": second["id"],
-                "to_port_id": second_in["id"],
-            },
-        )
-        assert first_to_second.status_code == 200
+        duplicate_producer = create_edge(client, workflow["id"], "produces", third["id"], first_artifact["id"])
+        assert duplicate_producer.status_code == 422
 
-        duplicate_input = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": third["id"],
-                "from_port_id": third_out["id"],
-                "to_process_id": second["id"],
-                "to_port_id": second_in["id"],
-            },
-        )
-        assert duplicate_input.status_code == 422
+        assert create_edge(client, workflow["id"], "consumes", second["id"], first_artifact["id"]).status_code == 200
+        duplicate_consume = create_edge(client, workflow["id"], "consumes", second["id"], first_artifact["id"])
+        assert duplicate_consume.status_code == 422
 
-        second_to_third = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": second["id"],
-                "from_port_id": second_out["id"],
-                "to_process_id": third["id"],
-                "to_port_id": third_in["id"],
-            },
-        )
-        assert second_to_third.status_code == 200
-
-        cycle = client.post(
-            f"/api/workflows/{workflow['id']}/edges",
-            json={
-                "from_process_id": third["id"],
-                "from_port_id": third_out["id"],
-                "to_process_id": first["id"],
-                "to_port_id": first_in["id"],
-            },
-        )
+        assert create_edge(client, workflow["id"], "produces", second["id"], second_artifact["id"]).status_code == 200
+        assert create_edge(client, workflow["id"], "consumes", third["id"], second_artifact["id"]).status_code == 200
+        assert create_edge(client, workflow["id"], "produces", third["id"], third_artifact["id"]).status_code == 200
+        cycle = create_edge(client, workflow["id"], "consumes", first["id"], third_artifact["id"])
         assert cycle.status_code == 422
 
 
-def test_edges_reject_cross_workflow_and_mismatched_ports(tmp_path: Path) -> None:
+def test_edges_reject_cross_workflow_nodes(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow_a = client.post("/api/workflows", json={"name": "a"}).json()
         workflow_b = client.post("/api/workflows", json={"name": "b"}).json()
-        first = client.post(
-            f"/api/workflows/{workflow_a['id']}/processes",
-            json={"name": "First", "type": "design"},
-        ).json()
-        second = client.post(
-            f"/api/workflows/{workflow_a['id']}/processes",
-            json={"name": "Second", "type": "implement"},
-        ).json()
-        external = client.post(
-            f"/api/workflows/{workflow_b['id']}/processes",
-            json={"name": "External", "type": "evaluate"},
-        ).json()
+        process_a = create_process(client, workflow_a["id"], "A")
+        process_b = create_process(client, workflow_b["id"], "B")
+        artifact_a = create_artifact(client, workflow_a["id"], "artifact_a")
+        artifact_b = create_artifact(client, workflow_b["id"], "artifact_b")
 
-        first_out = next(port for port in first["ports"] if port["direction"] == "out")
-        second_in = next(port for port in second["ports"] if port["direction"] == "in")
-        second_out = next(port for port in second["ports"] if port["direction"] == "out")
-        external_in = next(port for port in external["ports"] if port["direction"] == "in")
+        cross_artifact = create_edge(client, workflow_a["id"], "produces", process_a["id"], artifact_b["id"])
+        assert cross_artifact.status_code == 422
 
-        cross_workflow = client.post(
-            f"/api/workflows/{workflow_a['id']}/edges",
-            json={
-                "from_process_id": first["id"],
-                "from_port_id": first_out["id"],
-                "to_process_id": external["id"],
-                "to_port_id": external_in["id"],
-            },
-        )
-        assert cross_workflow.status_code == 422
-
-        mismatched_port = client.post(
-            f"/api/workflows/{workflow_a['id']}/edges",
-            json={
-                "from_process_id": first["id"],
-                "from_port_id": second_out["id"],
-                "to_process_id": second["id"],
-                "to_port_id": second_in["id"],
-            },
-        )
-        assert mismatched_port.status_code == 422
+        cross_process = create_edge(client, workflow_a["id"], "consumes", process_b["id"], artifact_a["id"])
+        assert cross_process.status_code == 422
 
 
 def test_qa_answer_flow(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "qa"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Ask", "type": "design"},
-        ).json()
+        process = create_process(client, workflow["id"], "Ask", "design")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         qa = client.post(
             f"/api/runs/{run['id']}/qa?wait=false",
@@ -524,10 +455,7 @@ def test_qa_answer_flow(tmp_path: Path) -> None:
 def test_qa_wait_times_out_and_cannot_be_answered_later(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "qa-timeout"}).json()
-        process = client.post(
-            f"/api/workflows/{workflow['id']}/processes",
-            json={"name": "Ask", "type": "design"},
-        ).json()
+        process = create_process(client, workflow["id"], "Ask", "design")
         run = client.post(f"/api/processes/{process['id']}/run").json()
         fake_process = FakeProcess()
         client.app.state.engine.register_process(run["id"], fake_process)

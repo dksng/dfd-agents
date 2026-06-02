@@ -1,4 +1,5 @@
 import type {
+  ArtifactNode,
   CostSummary,
   ProcessNode,
   RunDetail,
@@ -48,13 +49,24 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
+  createArtifact: (workflowId: string, payload: Partial<ArtifactNode>) =>
+    request<ArtifactNode>(`/api/workflows/${workflowId}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateArtifact: (id: string, payload: Partial<ArtifactNode>) =>
+    request<ArtifactNode>(`/api/artifacts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteArtifact: (id: string) =>
+    request<{ ok: boolean }>(`/api/artifacts/${id}`, { method: "DELETE" }),
   createEdge: (
     workflowId: string,
     payload: {
-      from_process_id: string;
-      from_port_id: string;
-      to_process_id: string;
-      to_port_id: string;
+      kind: "produces" | "consumes";
+      process_id: string;
+      artifact_id: string;
     }
   ) =>
     request(`/api/workflows/${workflowId}/edges`, {
@@ -96,6 +108,6 @@ export function wsUrl(runId: string): string {
   return `${protocol}//${window.location.host}/ws/runs/${runId}`;
 }
 
-export function artifactDownloadUrl(runId: string, portId: string): string {
-  return `${API_BASE}/api/runs/${runId}/artifacts/${portId}/download`;
+export function artifactDownloadUrl(runId: string, artifactId: string): string {
+  return `${API_BASE}/api/runs/${runId}/artifacts/${artifactId}/download`;
 }
