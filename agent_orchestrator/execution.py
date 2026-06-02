@@ -370,6 +370,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             process_handle.stdin.close()
 
             session_id = run.get("session_id")
+            persisted_session_id = session_id
             seen_message_ids: set[str] = set()
             async for raw_line in process_handle.stdout:
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
@@ -378,6 +379,9 @@ class ClaudeCodeAdapter(AgentAdapter):
                 parsed = self._parse_event(line)
                 if parsed.get("session_id"):
                     session_id = parsed["session_id"]
+                    if session_id != persisted_session_id:
+                        engine.store.update_run(run["id"], session_id=session_id)
+                        persisted_session_id = session_id
                 usage = self._usage_for_event(parsed, seen_message_ids)
                 if usage:
                     await engine.record_usage(

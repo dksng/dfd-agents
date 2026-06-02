@@ -168,6 +168,7 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
         "cache_read": 5,
         "cache_write": 2,
     }
+    assert assistant["session_id"] == "session_1"
     assert adapter._usage_for_event(duplicate, seen) is None
     assert adapter._usage_for_event(result, seen) is None
     assert adapter._final_cost_for_event(result) == 0.123
