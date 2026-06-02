@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from agent_orchestrator.api import create_app
 from agent_orchestrator.config import Settings
+from agent_orchestrator.execution import ClaudeCodeAdapter
 from agent_orchestrator.pricing import Pricing
 
 AUTH = {"authorization": "Bearer dev-token"}
@@ -61,6 +63,68 @@ def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
         cache_write=1_000_000,
     )
     assert cost == 110.25
+
+
+def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> None:
+    adapter = ClaudeCodeAdapter(["claude"])
+    seen: set[str] = set()
+    assistant = adapter._parse_event(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "cache_read_input_tokens": 5,
+                        "cache_creation_input_tokens": 2,
+                    },
+                },
+                "session_id": "session_1",
+            }
+        )
+    )
+    duplicate = adapter._parse_event(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "cache_read_input_tokens": 5,
+                        "cache_creation_input_tokens": 2,
+                    },
+                },
+            }
+        )
+    )
+    result = adapter._parse_event(
+        json.dumps(
+            {
+                "type": "result",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 30,
+                    "cache_read_input_tokens": 50,
+                    "cache_creation_input_tokens": 20,
+                },
+                "total_cost_usd": 0.123,
+            }
+        )
+    )
+
+    assert adapter._usage_for_event(assistant, seen) == {
+        "input_tokens": 10,
+        "output_tokens": 3,
+        "cache_read": 5,
+        "cache_write": 2,
+    }
+    assert adapter._usage_for_event(duplicate, seen) is None
+    assert adapter._usage_for_event(result, seen) is None
+    assert adapter._final_cost_for_event(result) == 0.123
 
 
 def test_workflow_run_review_and_cost(tmp_path: Path) -> None:

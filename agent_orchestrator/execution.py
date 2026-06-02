@@ -256,6 +256,22 @@ class ExecutionEngine:
         )
         await self._publish(run_id, "usage", usage)
 
+    async def record_final_cost(self, run_id: str, process: dict[str, Any], total_cost_usd: float) -> None:
+        current_cost = float(self.store.run_cost(run_id).get("cost_usd") or 0)
+        adjustment = total_cost_usd - current_cost
+        if abs(adjustment) < 0.000000001:
+            return
+        usage = self.store.add_usage(
+            run_id,
+            input_tokens=0,
+            output_tokens=0,
+            cache_read=0,
+            cache_write=0,
+            cost_usd=adjustment,
+            model=process["agent_model"],
+        )
+        await self._publish(run_id, "usage", usage)
+
     async def _log(self, run_id: str, level: str, message: str, raw_json: dict[str, Any] | None = None) -> None:
         row = self.store.add_log(run_id, level, message, raw_json)
         await self._publish(run_id, "log", row)
@@ -352,7 +368,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             process_handle.stdin.close()
 
             session_id = run.get("session_id")
-            last_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0}
+            seen_message_ids: set[str] = set()
             async for raw_line in process_handle.stdout:
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if not line:
@@ -360,27 +376,19 @@ class ClaudeCodeAdapter(AgentAdapter):
                 parsed = self._parse_event(line)
                 if parsed.get("session_id"):
                     session_id = parsed["session_id"]
-                if parsed.get("usage"):
-                    usage = parsed["usage"]
-                    current_usage = self._normalize_usage(usage)
-                    delta_usage = {
-                        key: max(0, current_usage[key] - last_usage[key])
-                        for key in last_usage
-                    }
-                    last_usage = {
-                        key: max(last_usage[key], current_usage[key])
-                        for key in last_usage
-                    }
-                    if not any(delta_usage.values()):
-                        continue
+                usage = self._usage_for_event(parsed, seen_message_ids)
+                if usage:
                     await engine.record_usage(
                         run["id"],
                         process,
-                        input_tokens=delta_usage["input_tokens"],
-                        output_tokens=delta_usage["output_tokens"],
-                        cache_read=delta_usage["cache_read"],
-                        cache_write=delta_usage["cache_write"],
+                        input_tokens=usage["input_tokens"],
+                        output_tokens=usage["output_tokens"],
+                        cache_read=usage["cache_read"],
+                        cache_write=usage["cache_write"],
                     )
+                final_cost = self._final_cost_for_event(parsed)
+                if final_cost is not None:
+                    await engine.record_final_cost(run["id"], process, final_cost)
                 await engine._log(run["id"], "info", parsed.get("message") or line, parsed.get("raw"))
             returncode = await process_handle.wait()
             if returncode != 0:
@@ -403,6 +411,23 @@ class ClaudeCodeAdapter(AgentAdapter):
             "cache_write": int(usage.get("cache_creation_input_tokens", usage.get("cache_write", 0))),
         }
 
+    def _usage_for_event(self, parsed: dict[str, Any], seen_message_ids: set[str]) -> dict[str, int] | None:
+        if parsed.get("event_type") != "assistant" or not parsed.get("usage"):
+            return None
+        message_id = parsed.get("message_id")
+        if not message_id:
+            return self._normalize_usage(parsed["usage"])
+        if message_id in seen_message_ids:
+            return None
+        seen_message_ids.add(message_id)
+        usage = self._normalize_usage(parsed["usage"])
+        return usage if any(usage.values()) else None
+
+    def _final_cost_for_event(self, parsed: dict[str, Any]) -> float | None:
+        if parsed.get("event_type") != "result" or parsed.get("total_cost_usd") is None:
+            return None
+        return float(parsed["total_cost_usd"])
+
     def _prompt(self, resume: bool, feedback_text: str) -> str:
         base = (
             "Read AGENTS.md and Goal.md in the current directory. "
@@ -419,7 +444,9 @@ class ClaudeCodeAdapter(AgentAdapter):
         except json.JSONDecodeError:
             return {"message": line, "raw": {"line": line}}
         message = data.get("message")
+        message_id = None
         if isinstance(message, dict):
+            message_id = message.get("id")
             text_blocks = message.get("content") or []
             if isinstance(text_blocks, list):
                 text = " ".join(block.get("text", "") for block in text_blocks if isinstance(block, dict))
@@ -428,8 +455,11 @@ class ClaudeCodeAdapter(AgentAdapter):
         if not usage and isinstance(data.get("message"), dict):
             usage = data["message"].get("usage")
         return {
+            "event_type": data.get("type"),
             "message": str(message or data.get("type") or data),
+            "message_id": message_id,
             "usage": usage,
+            "total_cost_usd": data.get("total_cost_usd"),
             "session_id": data.get("session_id") or data.get("sessionId"),
             "raw": data,
         }

@@ -42,6 +42,8 @@ This smoke test invokes the real Claude Code CLI and can spend API/subscription 
 
 ```bash
 python3 scripts/real_claude_smoke.py --port 8010 --budget-usd 0.25
+python3 scripts/real_claude_smoke.py --port 8011 --budget-usd 0.35 --with-qa
 ```
 
 Expected result: the run reaches `in_review`, has a `session_id`, and the text artifact is `ORCH_REAL_CLAUDE_OK`.
+With `--with-qa`, the script answers the orchestrator QA callback and expects `ORCH_REAL_QA_OK`.
