@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
+import { PERMISSION_MODES } from "./types";
 import type {
   ArtifactNode,
   ArtifactType,
@@ -179,7 +180,7 @@ const MODEL_OPTIONS = [
   "claude-haiku-4-5"
 ];
 
-const EFFORT_OPTIONS = ["low", "medium", "high"];
+const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
 
 // Goal.md は表示名 `{artifact name}` で編集・保存する。
 // 旧形式の `{{artifact:<id>}}` トークンは読み込み時に表示名へ正規化する。
@@ -234,6 +235,9 @@ function processPayload(draft: ProcessNode, artifacts: ArtifactNode[]): Record<s
     agent_kind: draft.agent_kind,
     agent_model: draft.agent_model,
     agent_effort: draft.agent_effort,
+    permission_mode: draft.permission_mode,
+    allowed_tools: draft.allowed_tools,
+    disallowed_tools: draft.disallowed_tools,
     goal_md: normalizeGoalForStorage(draft.goal_md, artifacts),
     template_id: draft.template_id,
     agents_md_append: draft.agents_md_append,
@@ -1132,6 +1136,45 @@ export function App() {
                     ))}
                   </select>
                 </label>
+              </div>
+
+              <div className="field-block">
+                <span>Permissions</span>
+                <label>
+                  Mode
+                  <select
+                    value={processDraft.permission_mode}
+                    onChange={(event) => updateProcessDraft("permission_mode", event.target.value)}
+                  >
+                    <option value="">inherit ({health?.default_permission_mode ?? "default"})</option>
+                    {PERMISSION_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Allowed tools (comma-separated)
+                  <input
+                    value={processDraft.allowed_tools}
+                    placeholder={health?.default_allowed_tools ?? ""}
+                    onChange={(event) => updateProcessDraft("allowed_tools", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Disallowed tools
+                  <input
+                    value={processDraft.disallowed_tools}
+                    placeholder={health?.default_disallowed_tools || "(none)"}
+                    onChange={(event) => updateProcessDraft("disallowed_tools", event.target.value)}
+                  />
+                </label>
+                <small className="muted-line">
+                  Empty = inherit global default. Submission runs utils/submit.py via Bash, so the
+                  effective permissions must allow it (the default allowlist covers python; or use
+                  bypassPermissions).
+                </small>
               </div>
 
               <div className="field-block">

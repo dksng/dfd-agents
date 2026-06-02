@@ -19,6 +19,9 @@ def new_id(prefix: str) -> str:
 
 AGENT_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
 
+# 空文字 "" はグローバル既定を継承する意味。
+PERMISSION_MODE_VALUES = {"", "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"}
+
 
 def _json_dump(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
@@ -52,6 +55,9 @@ CREATE TABLE IF NOT EXISTS process (
     agent_kind TEXT NOT NULL DEFAULT 'claude',
     agent_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
     agent_effort TEXT NOT NULL DEFAULT 'medium',
+    permission_mode TEXT NOT NULL DEFAULT '',
+    allowed_tools TEXT NOT NULL DEFAULT '',
+    disallowed_tools TEXT NOT NULL DEFAULT '',
     goal_md TEXT NOT NULL DEFAULT '',
     template_id TEXT NOT NULL DEFAULT 'base',
     agents_md_append TEXT NOT NULL DEFAULT '',
@@ -190,8 +196,12 @@ class Store:
 
     def _apply_additive_migrations(self, conn: sqlite3.Connection) -> None:
         """Add new nullable/defaulted columns to existing tables without a full reset."""
-        if "agent_effort" not in self._table_columns(conn, "process"):
+        process_columns = self._table_columns(conn, "process")
+        if "agent_effort" not in process_columns:
             conn.execute("ALTER TABLE process ADD COLUMN agent_effort TEXT NOT NULL DEFAULT 'medium'")
+        for column in ("permission_mode", "allowed_tools", "disallowed_tools"):
+            if column not in process_columns:
+                conn.execute(f"ALTER TABLE process ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
         return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -400,6 +410,9 @@ class Store:
             "agent_kind",
             "agent_model",
             "agent_effort",
+            "permission_mode",
+            "allowed_tools",
+            "disallowed_tools",
             "goal_md",
             "template_id",
             "agents_md_append",
@@ -410,6 +423,8 @@ class Store:
         updates = {key: value for key, value in data.items() if key in allowed and value is not None}
         if "agent_effort" in updates and updates["agent_effort"] not in AGENT_EFFORT_VALUES:
             raise ValueError(f"Invalid agent_effort: {updates['agent_effort']}")
+        if "permission_mode" in updates and updates["permission_mode"] not in PERMISSION_MODE_VALUES:
+            raise ValueError(f"Invalid permission_mode: {updates['permission_mode']}")
         with self.connect() as conn:
             if updates:
                 assignments = ", ".join(f"{key} = ?" for key in updates)

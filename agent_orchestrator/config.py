@@ -39,6 +39,22 @@ class Settings(BaseModel):
     )
     api_base: str = Field(default_factory=lambda: os.getenv("ORCH_API_BASE", "http://127.0.0.1:8000"))
     qa_timeout_seconds: int = Field(default_factory=lambda: _int_env("ORCH_QA_TIMEOUT_SECONDS", 3600))
+    # 工程が permission_mode を空("")にしているときに使うグローバル既定。
+    default_permission_mode: str = Field(
+        default_factory=lambda: os.getenv("ORCH_DEFAULT_PERMISSION_MODE", "default")
+    )
+    # allowed/disallowed はカンマ区切り（パターンに空白を含むため空白区切りは不可）。
+    default_allowed_tools: str = Field(
+        default_factory=lambda: os.getenv(
+            "ORCH_DEFAULT_ALLOWED_TOOLS",
+            "Read,Edit,Write,"
+            "Bash(python3 *),Bash(python *),Bash(git *),Bash(ls *),Bash(cat *),"
+            "Bash(grep *),Bash(rg *),Bash(find *),Bash(mkdir *),Bash(sed *)",
+        )
+    )
+    default_disallowed_tools: str = Field(
+        default_factory=lambda: os.getenv("ORCH_DEFAULT_DISALLOWED_TOOLS", "")
+    )
 
     @property
     def db_path(self) -> Path:

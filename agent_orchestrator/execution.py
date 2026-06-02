@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from .config import Settings
-from .db import AGENT_EFFORT_VALUES, Store
+from .db import AGENT_EFFORT_VALUES, PERMISSION_MODE_VALUES, Store
 from .events import EventHub
 from .pricing import Pricing
 from .workspace import WorkspaceBuilder, safe_name
@@ -197,7 +197,7 @@ class ExecutionEngine:
         command_exists = bool(command and shutil.which(command[0]))
         if mode == "mock" or (mode == "auto" and not command_exists):
             return MockAgentAdapter()
-        return ClaudeCodeAdapter(command)
+        return ClaudeCodeAdapter(command, self.settings)
 
     def describe_adapter(self) -> dict[str, Any]:
         mode = self.settings.agent_mode.lower()
@@ -209,6 +209,9 @@ class ExecutionEngine:
             "claude_available": claude_available,
             "active_adapter": active,
             "claude_command": self.settings.claude_command,
+            "default_permission_mode": self.settings.default_permission_mode,
+            "default_allowed_tools": self.settings.default_allowed_tools,
+            "default_disallowed_tools": self.settings.default_disallowed_tools,
         }
 
     def _read_output_values(self, run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -340,8 +343,9 @@ class MockAgentAdapter(AgentAdapter):
 
 
 class ClaudeCodeAdapter(AgentAdapter):
-    def __init__(self, command: list[str]):
+    def __init__(self, command: list[str], settings: Settings | None = None):
         self.command = command
+        self.settings = settings
 
     async def run(
         self,
@@ -424,7 +428,41 @@ class ClaudeCodeAdapter(AgentAdapter):
             if effort not in AGENT_EFFORT_VALUES:
                 raise ValueError(f"Invalid agent_effort: {effort}")
             command.extend(["--effort", effort])
+        self._apply_permissions(command, process)
         return command
+
+    def _permission_setting(self, process: dict[str, Any], key: str, default: str) -> str:
+        """工程の値が空ならグローバル既定にフォールバックする。"""
+        value = (process.get(key) or "").strip()
+        if value:
+            return value
+        return default
+
+    def _apply_permissions(self, command: list[str], process: dict[str, Any]) -> None:
+        default_mode = self.settings.default_permission_mode if self.settings else "default"
+        default_allowed = self.settings.default_allowed_tools if self.settings else ""
+        default_disallowed = self.settings.default_disallowed_tools if self.settings else ""
+
+        mode = self._permission_setting(process, "permission_mode", default_mode)
+        if mode and "--permission-mode" not in command:
+            if mode not in PERMISSION_MODE_VALUES or mode == "":
+                raise ValueError(f"Invalid permission_mode: {mode}")
+            command.extend(["--permission-mode", mode])
+
+        # allowed/disallowed はカンマ区切り。各パターン（Bash(git *) 等は空白を含む）を
+        # 個別の argv 要素として渡す（--allowedTools は可変長引数）。
+        allowed = self._split_tools(self._permission_setting(process, "allowed_tools", default_allowed))
+        disallowed = self._split_tools(self._permission_setting(process, "disallowed_tools", default_disallowed))
+        if allowed and "--allowedTools" not in command and "--allowed-tools" not in command:
+            command.append("--allowedTools")
+            command.extend(allowed)
+        if disallowed and "--disallowedTools" not in command and "--disallowed-tools" not in command:
+            command.append("--disallowedTools")
+            command.extend(disallowed)
+
+    @staticmethod
+    def _split_tools(value: str) -> list[str]:
+        return [item.strip() for item in (value or "").split(",") if item.strip()]
 
     def _normalize_usage(self, usage: dict[str, Any]) -> dict[str, int]:
         return {

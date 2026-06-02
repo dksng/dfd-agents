@@ -313,6 +313,18 @@ running ─(失敗)→ failed
 - 実行時、選択した SKILL のコピーを workdir の `.claude/skills/<name>/` に注入。
 - リモート参照は `skill_source`（local|git）と `skill_ref`（パス or `owner/repo[@ref]/path`）で永続化（§6.2 `process_skill`）。
 
+### 8.5.1 エージェント権限（permission）設定
+非対話の `claude --print` では許可プロンプトに応答できないため、ツール使用（Write/Edit/**Bash**）には明示許可が必要。提出は `utils/submit.py` を **Bash 実行**して成立するため、権限が無いとエージェントは成果物を作れず・提出できずに終了する。
+
+- **グローバル既定**（環境変数）：
+  - `ORCH_DEFAULT_PERMISSION_MODE`（既定 `default`）
+  - `ORCH_DEFAULT_ALLOWED_TOOLS`（カンマ区切り。既定で `Read,Edit,Write,Bash(python3 *),Bash(git *)…` を許可し、submit/question と一般的な編集が通る）
+  - `ORCH_DEFAULT_DISALLOWED_TOOLS`（既定 空）
+- **工程ごと上書き**（`process.permission_mode` / `allowed_tools` / `disallowed_tools`、空文字＝グローバル継承）。
+- `permission_mode` 選択肢：`default` / `acceptEdits` / `bypassPermissions` / `plan` / `dontAsk` / `auto`。
+- 実行時 `_command_for_process` が `--permission-mode` / `--allowedTools` / `--disallowedTools` を claude へ付与（パターンは空白を含むため各要素を個別 argv で渡す）。
+- UI：Process インスペクタの「Permissions」でモード選択＋許可/拒否リストを編集（空欄はグローバル既定をプレースホルダ表示）。
+
 ### 8.6 Goal.md オートコンプリート
 - Goal.md 記述欄で、その工程に**接続済みの成果物ノード**（consumes/produces 両方）の名前を `/` トリガーで候補表示しショートカット入力。
 - 例: `{Review後のUSDM PR}の内容を満たした、{詳細設計書} が完成している。`

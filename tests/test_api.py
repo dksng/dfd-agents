@@ -126,6 +126,66 @@ def test_command_omits_effort_when_empty() -> None:
     assert "--effort" not in command
 
 
+def test_command_uses_global_permission_defaults() -> None:
+    settings = Settings(
+        default_permission_mode="default",
+        default_allowed_tools="Read,Write,Bash(git *)",
+        default_disallowed_tools="WebFetch",
+    )
+    adapter = ClaudeCodeAdapter(["claude", "--print"], settings)
+    command = adapter._command_for_process(
+        {"agent_model": "claude-sonnet-4-5", "agent_effort": "", "permission_mode": "", "allowed_tools": "", "disallowed_tools": ""}
+    )
+    assert command[command.index("--permission-mode") + 1] == "default"
+    allowed_at = command.index("--allowedTools")
+    assert command[allowed_at + 1 : allowed_at + 4] == ["Read", "Write", "Bash(git *)"]
+    assert command[command.index("--disallowedTools") + 1] == "WebFetch"
+
+
+def test_process_overrides_global_permission_mode() -> None:
+    settings = Settings(default_permission_mode="default", default_allowed_tools="Read")
+    adapter = ClaudeCodeAdapter(["claude"], settings)
+    command = adapter._command_for_process(
+        {
+            "agent_model": "claude-sonnet-4-5",
+            "agent_effort": "",
+            "permission_mode": "bypassPermissions",
+            "allowed_tools": "Write,Bash(python3 *)",
+            "disallowed_tools": "",
+        }
+    )
+    assert command[command.index("--permission-mode") + 1] == "bypassPermissions"
+    allowed_at = command.index("--allowedTools")
+    assert command[allowed_at + 1 : allowed_at + 3] == ["Write", "Bash(python3 *)"]
+
+
+def test_permission_mode_persists_and_rejects_invalid(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "perm"}).json()
+        process = client.post(
+            f"/api/workflows/{workflow['id']}/processes",
+            json={"name": "Impl", "type": "implement"},
+        ).json()
+        updated = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"permission_mode": "bypassPermissions", "allowed_tools": "Read,Write"},
+        ).json()
+        assert updated["permission_mode"] == "bypassPermissions"
+        assert updated["allowed_tools"] == "Read,Write"
+        bad = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"permission_mode": "nonsense"},
+        )
+        assert bad.status_code == 422
+
+
+def test_health_reports_permission_defaults(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        health = client.get("/api/health").json()
+        assert health["default_permission_mode"]
+        assert "default_allowed_tools" in health
+
+
 def test_command_rejects_invalid_effort() -> None:
     adapter = ClaudeCodeAdapter(["claude"])
     try:

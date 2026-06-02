@@ -6,7 +6,19 @@ export interface HealthInfo {
   claude_available: boolean;
   active_adapter: "mock" | "claude";
   claude_command: string;
+  default_permission_mode: string;
+  default_allowed_tools: string;
+  default_disallowed_tools: string;
 }
+
+export const PERMISSION_MODES = [
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+  "dontAsk",
+  "auto"
+] as const;
 
 export interface SkillSelection {
   skill_name: string;
@@ -30,6 +42,9 @@ export interface ProcessNode {
   agent_kind: string;
   agent_model: string;
   agent_effort: string;
+  permission_mode: string;
+  allowed_tools: string;
+  disallowed_tools: string;
   goal_md: string;
   template_id: string;
   agents_md_append: string;

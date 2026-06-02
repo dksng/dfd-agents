@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 ArtifactType = Literal["file", "url", "text"]
 AgentEffort = Literal["low", "medium", "high", "xhigh", "max"]
+# 空文字 "" はグローバル既定を継承する。
+PermissionMode = Literal["", "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"]
 ReviewAction = Literal["approve", "reject"]
 
 
@@ -37,6 +39,9 @@ class ProcessConfigUpdate(BaseModel):
     agent_kind: str | None = None
     agent_model: str | None = None
     agent_effort: AgentEffort | None = None
+    permission_mode: PermissionMode | None = None
+    allowed_tools: str | None = None
+    disallowed_tools: str | None = None
     goal_md: str | None = None
     template_id: str | None = None
     agents_md_append: str | None = None
