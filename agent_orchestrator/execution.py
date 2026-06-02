@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from .config import Settings
-from .db import Store
+from .db import AGENT_EFFORT_VALUES, Store
 from .events import EventHub
 from .pricing import Pricing
 from .workspace import WorkspaceBuilder, safe_name
@@ -421,6 +421,8 @@ class ClaudeCodeAdapter(AgentAdapter):
             command.extend(["--model", process["agent_model"]])
         effort = (process.get("agent_effort") or "").strip()
         if effort and "--effort" not in command:
+            if effort not in AGENT_EFFORT_VALUES:
+                raise ValueError(f"Invalid agent_effort: {effort}")
             command.extend(["--effort", effort])
         return command
 

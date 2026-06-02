@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ArtifactType = Literal["file", "url", "text"]
+AgentEffort = Literal["low", "medium", "high", "xhigh", "max"]
 ReviewAction = Literal["approve", "reject"]
 
 
@@ -35,7 +36,7 @@ class ProcessConfigUpdate(BaseModel):
     type: str | None = None
     agent_kind: str | None = None
     agent_model: str | None = None
-    agent_effort: str | None = None
+    agent_effort: AgentEffort | None = None
     goal_md: str | None = None
     template_id: str | None = None
     agents_md_append: str | None = None

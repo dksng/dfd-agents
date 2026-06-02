@@ -17,6 +17,9 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+AGENT_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
+
+
 def _json_dump(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
 
@@ -405,6 +408,8 @@ class Store:
             "execution_mode",
         }
         updates = {key: value for key, value in data.items() if key in allowed and value is not None}
+        if "agent_effort" in updates and updates["agent_effort"] not in AGENT_EFFORT_VALUES:
+            raise ValueError(f"Invalid agent_effort: {updates['agent_effort']}")
         with self.connect() as conn:
             if updates:
                 assignments = ", ".join(f"{key} = ?" for key in updates)

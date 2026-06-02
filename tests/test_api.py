@@ -126,6 +126,16 @@ def test_command_omits_effort_when_empty() -> None:
     assert "--effort" not in command
 
 
+def test_command_rejects_invalid_effort() -> None:
+    adapter = ClaudeCodeAdapter(["claude"])
+    try:
+        adapter._command_for_process({"agent_model": "claude-sonnet-4-5", "agent_effort": "invalid"})
+    except ValueError as exc:
+        assert "Invalid agent_effort" in str(exc)
+    else:
+        raise AssertionError("invalid effort should be rejected")
+
+
 def test_process_effort_persists(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "effort"}).json()
@@ -139,6 +149,20 @@ def test_process_effort_persists(tmp_path: Path) -> None:
         ).json()
         assert updated["agent_model"] == "claude-opus-4-8"
         assert updated["agent_effort"] == "high"
+
+
+def test_process_effort_rejects_invalid_value(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "effort-invalid"}).json()
+        process = client.post(
+            f"/api/workflows/{workflow['id']}/processes",
+            json={"name": "Impl", "type": "implement"},
+        ).json()
+        response = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"agent_effort": "invalid"},
+        )
+        assert response.status_code == 422
 
 
 def test_health_reports_active_adapter(tmp_path: Path) -> None:

@@ -33,8 +33,9 @@ export const api = {
       body: JSON.stringify({ name })
     }),
   getWorkflow: (id: string) => request<Workflow>(`/api/workflows/${id}`),
-  updateWorkflow: (id: string, payload: Partial<Workflow>) =>
+  updateWorkflow: (id: string, payload: Partial<Workflow>, init: RequestInit = {}) =>
     request<Workflow>(`/api/workflows/${id}`, {
+      ...init,
       method: "PUT",
       body: JSON.stringify(payload)
     }),
@@ -45,8 +46,9 @@ export const api = {
     }),
   deleteProcess: (id: string) =>
     request<{ ok: boolean }>(`/api/processes/${id}`, { method: "DELETE" }),
-  updateProcessConfig: (id: string, payload: Record<string, unknown>) =>
+  updateProcessConfig: (id: string, payload: Record<string, unknown>, init: RequestInit = {}) =>
     request<ProcessNode>(`/api/processes/${id}/config`, {
+      ...init,
       method: "PUT",
       body: JSON.stringify(payload)
     }),
@@ -55,8 +57,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateArtifact: (id: string, payload: Partial<ArtifactNode>) =>
+  updateArtifact: (id: string, payload: Partial<ArtifactNode>, init: RequestInit = {}) =>
     request<ArtifactNode>(`/api/artifacts/${id}`, {
+      ...init,
       method: "PUT",
       body: JSON.stringify(payload)
     }),

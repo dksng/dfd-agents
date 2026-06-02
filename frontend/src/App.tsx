@@ -183,22 +183,58 @@ const EFFORT_OPTIONS = ["low", "medium", "high"];
 
 // Goal.md は表示名 `{artifact name}` で編集・保存する。
 // 旧形式の `{{artifact:<id>}}` トークンは読み込み時に表示名へ正規化する。
+function artifactDisplayLabel(artifact: ArtifactNode, artifacts: ArtifactNode[]): string {
+  const duplicateName = artifacts.some((item) => item.id !== artifact.id && item.name === artifact.name);
+  return duplicateName ? `${artifact.name} #${artifact.id.slice(-6)}` : artifact.name;
+}
+
 function normalizeGoalForDisplay(goal: string, artifacts: ArtifactNode[]): string {
   return goal.replace(/\{\{artifact:([^}]+)\}\}/g, (_match, id: string) => {
     const artifact = artifacts.find((item) => item.id === id);
-    return artifact ? `{${artifact.name}}` : `{${id}}`;
+    return artifact ? `{${artifactDisplayLabel(artifact, artifacts)}}` : `{${id}}`;
   });
 }
 
+function normalizeGoalForStorage(goal: string, artifacts: ArtifactNode[]): string {
+  const nameCounts = new Map<string, number>();
+  for (const artifact of artifacts) {
+    nameCounts.set(artifact.name, (nameCounts.get(artifact.name) ?? 0) + 1);
+  }
+  const artifactByLabel = new Map<string, ArtifactNode>();
+  const artifactByUniqueName = new Map<string, ArtifactNode>();
+  for (const artifact of artifacts) {
+    artifactByLabel.set(artifactDisplayLabel(artifact, artifacts), artifact);
+    if ((nameCounts.get(artifact.name) ?? 0) === 1) {
+      artifactByUniqueName.set(artifact.name, artifact);
+    }
+  }
+  return goal.replace(/\{([^{}]+)\}/g, (match, label: string) => {
+    const artifact = artifactByLabel.get(label) ?? artifactByUniqueName.get(label);
+    return artifact ? `{{artifact:${artifact.id}}}` : match;
+  });
+}
+
+function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
+  if (!workflow) {
+    return [];
+  }
+  const connectedIds = new Set(
+    workflow.edges
+      .filter((edge) => edge.process_id === processId)
+      .map((edge) => edge.artifact_id)
+  );
+  return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
+}
+
 // autosave / 明示保存で送るペイロード（位置はドラッグ側で別途保存するため含めない）。
-function processPayload(draft: ProcessNode): Record<string, unknown> {
+function processPayload(draft: ProcessNode, artifacts: ArtifactNode[]): Record<string, unknown> {
   return {
     name: draft.name,
     type: draft.type,
     agent_kind: draft.agent_kind,
     agent_model: draft.agent_model,
     agent_effort: draft.agent_effort,
-    goal_md: draft.goal_md,
+    goal_md: normalizeGoalForStorage(draft.goal_md, artifacts),
     template_id: draft.template_id,
     agents_md_append: draft.agents_md_append,
     execution_mode: draft.execution_mode,
@@ -246,6 +282,12 @@ export function App() {
   const workflowIdRef = useRef<string | null>(null);
   const savedProcessRef = useRef<string>("");
   const savedArtifactRef = useRef<string>("");
+  const processSaveSeqRef = useRef(0);
+  const artifactSaveSeqRef = useRef(0);
+  const workflowSaveSeqRef = useRef(0);
+  const processSaveAbortRef = useRef<AbortController | null>(null);
+  const artifactSaveAbortRef = useRef<AbortController | null>(null);
+  const workflowSaveAbortRef = useRef<AbortController | null>(null);
 
   const loadWorkflow = useCallback(async (id: string) => {
     const data = await api.getWorkflow(id);
@@ -317,9 +359,10 @@ export function App() {
       return;
     }
     const draft = structuredClone(selectedProcess);
-    draft.goal_md = normalizeGoalForDisplay(draft.goal_md, workflow?.artifacts ?? []);
+    const connectedArtifacts = artifactsConnectedToProcess(workflow, selectedProcess.id);
+    draft.goal_md = normalizeGoalForDisplay(draft.goal_md, connectedArtifacts);
     setProcessDraft(draft);
-    savedProcessRef.current = JSON.stringify(processPayload(draft));
+    savedProcessRef.current = JSON.stringify(processPayload(draft, connectedArtifacts));
     setDiffBaseId(selectedProcess.runs?.[1]?.id ?? "");
     setDiffTargetId(selectedProcess.runs?.[0]?.id ?? "");
     setDiffText("");
@@ -350,23 +393,37 @@ export function App() {
     if (!processDraft) {
       return;
     }
-    const serialized = JSON.stringify(processPayload(processDraft));
+    const connectedArtifacts = artifactsConnectedToProcess(workflow, processDraft.id);
+    const payload = processPayload(processDraft, connectedArtifacts);
+    const serialized = JSON.stringify(payload);
     if (serialized === savedProcessRef.current) {
       return;
     }
+    processSaveAbortRef.current?.abort();
+    const controller = new AbortController();
+    const saveSeq = ++processSaveSeqRef.current;
     const timer = window.setTimeout(() => {
       void api
-        .updateProcessConfig(processDraft.id, processPayload(processDraft))
+        .updateProcessConfig(processDraft.id, payload, { signal: controller.signal })
         .then(() => {
+          if (controller.signal.aborted || saveSeq !== processSaveSeqRef.current) {
+            return undefined;
+          }
           savedProcessRef.current = serialized;
           if (workflowIdRef.current) {
             return loadWorkflow(workflowIdRef.current);
           }
+          return undefined;
         })
-        .catch((exc) => setError(String(exc)));
+        .catch((exc) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setError(String(exc));
+        });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [processDraft, loadWorkflow]);
+  }, [processDraft, workflow, loadWorkflow]);
 
   // 成果物ドラフトのデバウンス自動保存。
   useEffect(() => {
@@ -377,16 +434,28 @@ export function App() {
     if (serialized === savedArtifactRef.current) {
       return;
     }
+    artifactSaveAbortRef.current?.abort();
+    const controller = new AbortController();
+    const saveSeq = ++artifactSaveSeqRef.current;
     const timer = window.setTimeout(() => {
       void api
-        .updateArtifact(artifactDraft.id, artifactPayload(artifactDraft))
+        .updateArtifact(artifactDraft.id, artifactPayload(artifactDraft), { signal: controller.signal })
         .then(() => {
+          if (controller.signal.aborted || saveSeq !== artifactSaveSeqRef.current) {
+            return undefined;
+          }
           savedArtifactRef.current = serialized;
           if (workflowIdRef.current) {
             return loadWorkflow(workflowIdRef.current);
           }
+          return undefined;
         })
-        .catch((exc) => setError(String(exc)));
+        .catch((exc) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setError(String(exc));
+        });
     }, 700);
     return () => window.clearTimeout(timer);
   }, [artifactDraft, loadWorkflow]);
@@ -397,14 +466,25 @@ export function App() {
       return;
     }
     const id = workflow.id;
+    workflowSaveAbortRef.current?.abort();
+    const controller = new AbortController();
+    const saveSeq = ++workflowSaveSeqRef.current;
     const timer = window.setTimeout(() => {
       void api
-        .updateWorkflow(id, { name: workflowNameDraft })
+        .updateWorkflow(id, { name: workflowNameDraft }, { signal: controller.signal })
         .then(() => {
+          if (controller.signal.aborted || saveSeq !== workflowSaveSeqRef.current) {
+            return;
+          }
           setWorkflows((items) => items.map((item) => (item.id === id ? { ...item, name: workflowNameDraft } : item)));
           setWorkflow((current) => (current && current.id === id ? { ...current, name: workflowNameDraft } : current));
         })
-        .catch((exc) => setError(String(exc)));
+        .catch((exc) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setError(String(exc));
+        });
     }, 700);
     return () => window.clearTimeout(timer);
   }, [workflowNameDraft, workflow]);
@@ -551,15 +631,7 @@ export function App() {
   );
 
   const goalArtifacts = useMemo(() => {
-    if (!workflow || !processDraft) {
-      return [];
-    }
-    const connectedIds = new Set(
-      workflow.edges
-        .filter((edge) => edge.process_id === processDraft.id)
-        .map((edge) => edge.artifact_id)
-    );
-    return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
+    return processDraft ? artifactsConnectedToProcess(workflow, processDraft.id) : [];
   }, [processDraft?.id, workflow]);
 
   async function addProcess() {
@@ -594,7 +666,9 @@ export function App() {
     if (!processDraft || !workflow) {
       return;
     }
-    const payload = processPayload(processDraft);
+    processSaveAbortRef.current?.abort();
+    const payload = processPayload(processDraft, artifactsConnectedToProcess(workflow, processDraft.id));
+    ++processSaveSeqRef.current;
     savedProcessRef.current = JSON.stringify(payload);
     await api.updateProcessConfig(processDraft.id, payload);
     await loadWorkflow(workflow.id);
@@ -604,7 +678,9 @@ export function App() {
     if (!artifactDraft || !workflow) {
       return;
     }
+    artifactSaveAbortRef.current?.abort();
     const payload = artifactPayload(artifactDraft);
+    ++artifactSaveSeqRef.current;
     savedArtifactRef.current = JSON.stringify(payload);
     await api.updateArtifact(artifactDraft.id, payload);
     await loadWorkflow(workflow.id);
@@ -737,7 +813,7 @@ export function App() {
     }
     const before = processDraft.goal_md.slice(0, Math.max(goalCursor - 1, 0));
     const after = processDraft.goal_md.slice(goalCursor);
-    const token = `{${artifact.name}}`;
+    const token = `{${artifactDisplayLabel(artifact, goalArtifacts)}}`;
     const next = `${before}${token}${after}`;
     updateProcessDraft("goal_md", next);
     setSuggestOpen(false);
