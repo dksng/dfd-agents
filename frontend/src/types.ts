@@ -11,6 +11,12 @@ export interface HealthInfo {
   default_disallowed_tools: string;
 }
 
+export interface AppSettings {
+  skill_repos: string[];
+  config_root: string;
+  skill_cache_root: string;
+}
+
 export const PERMISSION_MODES = [
   "default",
   "acceptEdits",
@@ -38,7 +44,6 @@ export interface ProcessNode {
   id: string;
   workflow_id: string;
   name: string;
-  type: string;
   agent_kind: string;
   agent_model: string;
   agent_effort: string;
@@ -87,6 +92,8 @@ export interface Workflow {
   edges: WorkflowEdge[];
 }
 
+export type WorkflowExportDocument = Record<string, unknown>;
+
 export interface RunSummary {
   id: string;
   process_id: string;
@@ -98,6 +105,11 @@ export interface RunSummary {
   input_snapshot_json: Record<string, unknown>;
   output_snapshot_json: Record<string, unknown>;
   workdir_path: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_write: number;
+  cost_usd: number;
 }
 
 export interface RunLog {

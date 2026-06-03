@@ -1,11 +1,13 @@
 import type {
+  AppSettings,
   ArtifactNode,
   CostSummary,
   HealthInfo,
   ProcessNode,
   RunDetail,
   SkillCandidate,
-  Workflow
+  Workflow,
+  WorkflowExportDocument
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -33,6 +35,25 @@ export const api = {
       body: JSON.stringify({ name })
     }),
   getWorkflow: (id: string) => request<Workflow>(`/api/workflows/${id}`),
+  exportWorkflow: async (id: string) => {
+    const response = await fetch(`${API_BASE}/api/workflows/${id}/export`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];
+    const quoted = disposition.match(/filename="([^"]+)"/)?.[1];
+    const filename = encoded ? decodeURIComponent(encoded) : quoted || "workflow.workflow.json";
+    return { document: (await response.json()) as WorkflowExportDocument, filename };
+  },
+  importWorkflow: (document: WorkflowExportDocument, name?: string) =>
+    request<Workflow>("/api/workflows/import", {
+      method: "POST",
+      body: JSON.stringify({ document, name })
+    }),
+  deleteWorkflow: (id: string) =>
+    request<{ ok: boolean }>(`/api/workflows/${id}`, { method: "DELETE" }),
   updateWorkflow: (id: string, payload: Partial<Workflow>, init: RequestInit = {}) =>
     request<Workflow>(`/api/workflows/${id}`, {
       ...init,
@@ -63,6 +84,21 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
+  uploadArtifactSourceFile: async (id: string, file: File) => {
+    const response = await fetch(
+      `${API_BASE}/api/artifacts/${id}/source-file?filename=${encodeURIComponent(file.name)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: file
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json() as Promise<ArtifactNode>;
+  },
   deleteArtifact: (id: string) =>
     request<{ ok: boolean }>(`/api/artifacts/${id}`, { method: "DELETE" }),
   createEdge: (
@@ -103,6 +139,12 @@ export const api = {
     }),
   workflowCost: (id: string) => request<CostSummary>(`/api/workflows/${id}/cost`),
   getHealth: () => request<HealthInfo>("/api/health"),
+  getSettings: () => request<AppSettings>("/api/settings"),
+  updateSettings: (payload: Partial<AppSettings>) =>
+    request<AppSettings>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
   getAgentsBase: (templateId: string) =>
     request<{ template_id: string; content: string }>(
       `/api/templates/${templateId}/agents-base`
