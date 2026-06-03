@@ -32,9 +32,60 @@ button:disabled {
 }
 
 .app-shell {
-  display: grid;
-  grid-template-rows: 54px 1fr 260px;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
+  min-height: 0;
+}
+
+.topbar {
+  height: 54px;
+  flex-shrink: 0;
+}
+
+/* 可変パネルのルート（左|中央|右） */
+.workspace-pg {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 各パネルの中身を全高で満たし、はみ出しはパネル内でスクロール */
+.pg-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pg-panel > * {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* リサイズ用ハンドル */
+.resize-handle {
+  position: relative;
+  flex-shrink: 0;
+  background: #d7dde3;
+  transition: background 0.12s ease;
+}
+
+.resize-handle:hover,
+.resize-handle[data-resize-handle-state="hover"],
+.resize-handle[data-resize-handle-state="drag"] {
+  background: #2563eb;
+}
+
+.resize-h {
+  width: 5px;
+  cursor: col-resize;
+}
+
+.resize-v {
+  height: 5px;
+  cursor: row-resize;
 }
 
 .topbar,
@@ -238,6 +289,8 @@ button:disabled {
 }
 
 .bottom-panel {
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid #d7dde3;
   min-height: 0;
   padding: 12px 16px;
@@ -728,10 +781,12 @@ textarea {
   display: grid;
   grid-template-columns: 1fr 360px;
   gap: 14px;
-  height: calc(100% - 42px);
+  flex: 1;
+  min-height: 0;
 }
 
 .activity-grid.log-only {
+  display: block;
   grid-template-columns: 1fr;
 }
 

@@ -4,7 +4,7 @@ import {
   Controls,
   Handle,
   MarkerType,
-  Panel,
+  Panel as FlowPanel,
   Position,
   ReactFlow,
   type Connection,
@@ -38,6 +38,7 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
 import { PERMISSION_MODES } from "./types";
 import type {
@@ -1803,7 +1804,8 @@ export function App() {
         </div>
       )}
 
-      <main className="workspace">
+      <PanelGroup direction="horizontal" className="workspace-pg" autoSaveId="orch-cols">
+        <Panel defaultSize={20} minSize={12} className="pg-panel">
         <aside className="left-panel">
           <div className="panel-title">
             <strong>Workflows</strong>
@@ -1911,7 +1913,13 @@ export function App() {
             {runProcessSummaries.length === 0 && <div className="muted-line">No processes yet</div>}
           </div>
         </aside>
+        </Panel>
 
+        <PanelResizeHandle className="resize-handle resize-h" />
+
+        <Panel defaultSize={54} minSize={28} className="pg-panel">
+        <PanelGroup direction="vertical" autoSaveId="orch-center">
+        <Panel defaultSize={62} minSize={20} className="pg-panel">
         <section className="canvas-panel" ref={canvasRef}>
           <ReactFlow
             nodes={nodes}
@@ -1947,7 +1955,7 @@ export function App() {
             }
             fitView
           >
-            <Panel position="top-left" className="canvas-toolbar">
+            <FlowPanel position="top-left" className="canvas-toolbar">
               <button className="icon-text" onClick={() => void addProcess()} disabled={!workflow}>
                 <Plus size={15} />
                 Process
@@ -1964,7 +1972,7 @@ export function App() {
                 <Link size={15} />
                 URL
               </button>
-            </Panel>
+            </FlowPanel>
             <Background />
             <Controls />
           </ReactFlow>
@@ -1988,7 +1996,37 @@ export function App() {
             </div>
           )}
         </section>
+        </Panel>
 
+        <PanelResizeHandle className="resize-handle resize-v" />
+
+        <Panel defaultSize={38} minSize={12} className="pg-panel">
+        <section className="bottom-panel">
+          <div className="activity-head">
+            <div>
+              <strong>{selectedRun ? selectedRun.id : "No run selected"}</strong>
+              {selectedRun && <StatusPill status={selectedRun.status} />}
+            </div>
+            <div className="cost-strip">
+              <span>{usage.input_tokens} in</span>
+              <span>{usage.output_tokens} out</span>
+              <strong>{formatCost(usage.cost_usd)}</strong>
+            </div>
+          </div>
+
+          {selectedRun && (
+            <div className="activity-grid log-only">
+              <LogViewer key={selectedRun.id} logs={selectedRun.logs} status={selectedRun.status} />
+            </div>
+          )}
+        </section>
+        </Panel>
+        </PanelGroup>
+        </Panel>
+
+        <PanelResizeHandle className="resize-handle resize-h" />
+
+        <Panel defaultSize={26} minSize={15} className="pg-panel">
         <aside className="right-panel">
           {selectedRun && (
             <div className="review-panel embedded-review">
@@ -2432,27 +2470,8 @@ export function App() {
 
           {!selectedRun && !processDraft && !artifactDraft && <div className="empty-panel">Select a process or artifact</div>}
         </aside>
-      </main>
-
-      <section className="bottom-panel">
-        <div className="activity-head">
-          <div>
-            <strong>{selectedRun ? selectedRun.id : "No run selected"}</strong>
-            {selectedRun && <StatusPill status={selectedRun.status} />}
-          </div>
-          <div className="cost-strip">
-            <span>{usage.input_tokens} in</span>
-            <span>{usage.output_tokens} out</span>
-            <strong>{formatCost(usage.cost_usd)}</strong>
-          </div>
-        </div>
-
-        {selectedRun && (
-          <div className="activity-grid log-only">
-            <LogViewer key={selectedRun.id} logs={selectedRun.logs} status={selectedRun.status} />
-          </div>
-        )}
-      </section>
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }
