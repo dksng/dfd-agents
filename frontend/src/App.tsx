@@ -401,7 +401,8 @@ function toolResultText(content: unknown): string {
   return content == null ? "" : JSON.stringify(content);
 }
 
-function classifyLog(log: RunLog): ClassifiedLog {
+// 表示価値のないイベント（テキストもツールも無い user/assistant、中継 system 等）は null を返して捨てる。
+function classifyLog(log: RunLog): ClassifiedLog | null {
   const base = { id: log.id, ts: log.ts, raw: log.raw_json };
   const raw = (log.raw_json ?? {}) as Record<string, unknown>;
   const eventType = typeof raw.type === "string" ? raw.type : "";
@@ -435,7 +436,7 @@ function classifyLog(log: RunLog): ClassifiedLog {
     if (text) {
       return { ...base, category: "agent", title: firstLine(text), body: text, isError: false };
     }
-    return { ...base, category: "system", title: "assistant", body: "", isError: false };
+    return null; // テキストもツールも無い assistant イベント → 捨てる
   }
 
   if (eventType === "user") {
@@ -452,7 +453,7 @@ function classifyLog(log: RunLog): ClassifiedLog {
         isError
       };
     }
-    return { ...base, category: "system", title: "user", body: "", isError: false };
+    return null; // tool_result を含まない user イベント → 捨てる
   }
 
   if (eventType === "result") {
@@ -460,7 +461,12 @@ function classifyLog(log: RunLog): ClassifiedLog {
     return { ...base, category: "system", title: `result: ${firstLine(text)}`, body: text, isError: false };
   }
 
-  // run lifecycle（start/submit/review/qa…）や system / rate_limit_event
+  // ストリームの中継 system/rate_limit_event など（type付きで本文なし）は捨てる。
+  if (eventType) {
+    return null;
+  }
+
+  // オーケストレーターのライフサイクルログ（type無し: start/submit/review/qa…）は表示。
   return { ...base, category: "system", title: log.message, body: log.message, isError: false };
 }
 
@@ -499,7 +505,10 @@ function LogViewer({ logs, status }: { logs: RunLog[]; status: string }) {
   const [follow, setFollow] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const classified = useMemo(() => logs.map(classifyLog), [logs]);
+  const classified = useMemo(
+    () => logs.map(classifyLog).filter((e): e is ClassifiedLog => e !== null),
+    [logs]
+  );
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: classified.length, agent: 0, tool: 0, system: 0, error: 0 };
     for (const e of classified) c[e.category] += 1;
