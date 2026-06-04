@@ -83,10 +83,10 @@
 ---
 
 ## 5. 進め方（チェックリスト）
-- [ ] 未コミットの in-flight 変更を確定（クリーンツリー化）
-- [ ] Phase 0: 例外中央化 → api.py の try/except 削除（テスト緑を確認）
-- [ ] Phase 2-7: lib/ へ純粋関数抽出（build 緑を確認）
-- [ ] Phase 1: db.py → repositories、execution.py → adapters/純粋関数、api.py → routers
+- [x] 未コミットの in-flight 変更を確定（クリーンツリー化）
+- [x] Phase 0: lint/format 導入、例外中央化 → api.py の try/except 削除（lint/test/build 緑を確認）
+- [x] Phase 2-7: lib/ へ純粋関数抽出（build 緑を確認）
+- [ ] Phase 1: db.py → repositories、execution.py → adapters/純粋関数、api.py → routers（execution/api は完了、db repository 分割は未完了）
 - [ ] Phase 2-8/9: components/ と hooks/ へ分解、App() を薄く
 - [ ] Phase 3: 型生成・テスト分割/補強
 

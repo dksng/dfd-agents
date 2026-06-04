@@ -52,8 +52,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ document, name })
     }),
-  deleteWorkflow: (id: string) =>
-    request<{ ok: boolean }>(`/api/workflows/${id}`, { method: "DELETE" }),
+  deleteWorkflow: (id: string) => request<{ ok: boolean }>(`/api/workflows/${id}`, { method: "DELETE" }),
   updateWorkflow: (id: string, payload: Partial<Workflow>, init: RequestInit = {}) =>
     request<Workflow>(`/api/workflows/${id}`, {
       ...init,
@@ -65,8 +64,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  deleteProcess: (id: string) =>
-    request<{ ok: boolean }>(`/api/processes/${id}`, { method: "DELETE" }),
+  deleteProcess: (id: string) => request<{ ok: boolean }>(`/api/processes/${id}`, { method: "DELETE" }),
   updateProcessConfig: (id: string, payload: Record<string, unknown>, init: RequestInit = {}) =>
     request<ProcessNode>(`/api/processes/${id}/config`, {
       ...init,
@@ -99,8 +97,7 @@ export const api = {
     }
     return response.json() as Promise<ArtifactNode>;
   },
-  deleteArtifact: (id: string) =>
-    request<{ ok: boolean }>(`/api/artifacts/${id}`, { method: "DELETE" }),
+  deleteArtifact: (id: string) => request<{ ok: boolean }>(`/api/artifacts/${id}`, { method: "DELETE" }),
   createEdge: (
     workflowId: string,
     payload: {
@@ -113,14 +110,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  deleteEdge: (id: string) =>
-    request<{ ok: boolean }>(`/api/edges/${id}`, { method: "DELETE" }),
+  deleteEdge: (id: string) => request<{ ok: boolean }>(`/api/edges/${id}`, { method: "DELETE" }),
   listSkills: (refresh = false) =>
-    request<{ skills: SkillCandidate[]; errors: string[] }>(
-      `/api/skills?refresh=${String(refresh)}`
-    ),
-  runProcess: (id: string) =>
-    request<RunDetail>(`/api/processes/${id}/run`, { method: "POST" }),
+    request<{ skills: SkillCandidate[]; errors: string[] }>(`/api/skills?refresh=${String(refresh)}`),
+  runProcess: (id: string) => request<RunDetail>(`/api/processes/${id}/run`, { method: "POST" }),
   resumeRun: (id: string, feedback_text: string) =>
     request<RunDetail>(`/api/runs/${id}/resume`, {
       method: "POST",
@@ -146,9 +139,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getAgentsBase: (templateId: string) =>
-    request<{ template_id: string; content: string }>(
-      `/api/templates/${templateId}/agents-base`
-    )
+    request<{ template_id: string; content: string }>(`/api/templates/${templateId}/agents-base`)
 };
 
 export function wsUrl(runId: string): string {

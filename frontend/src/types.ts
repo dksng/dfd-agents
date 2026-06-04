@@ -17,14 +17,7 @@ export interface AppSettings {
   skill_cache_root: string;
 }
 
-export const PERMISSION_MODES = [
-  "default",
-  "acceptEdits",
-  "bypassPermissions",
-  "plan",
-  "dontAsk",
-  "auto"
-] as const;
+export const PERMISSION_MODES = ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"] as const;
 
 export interface SkillSelection {
   skill_name: string;

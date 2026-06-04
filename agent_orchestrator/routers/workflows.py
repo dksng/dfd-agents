@@ -51,10 +51,7 @@ def export_workflow(workflow_id: str, store: Store = Depends(get_store)) -> JSON
     return JSONResponse(
         content=document,
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{fallback_filename}"; '
-                f"filename*=UTF-8''{quote(filename)}"
-            )
+            "Content-Disposition": (f"attachment; filename=\"{fallback_filename}\"; filename*=UTF-8''{quote(filename)}")
         },
     )
 

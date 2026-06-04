@@ -31,4 +31,3 @@ class EventHub:
                 await websocket.send_json(event)
             except RuntimeError:
                 await self.disconnect(run_id, websocket)
-

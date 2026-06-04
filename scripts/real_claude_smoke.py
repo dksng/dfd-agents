@@ -166,7 +166,9 @@ def main() -> int:
     try:
         wait_health(base_url)
         run = run_smoke(base_url, args.model, with_qa=args.with_qa, answer=args.answer)
-        artifact_text = next((item.get("text_value") for item in run["artifacts"] if item["artifact_type"] == "text"), None)
+        artifact_text = next(
+            (item.get("text_value") for item in run["artifacts"] if item["artifact_type"] == "text"), None
+        )
         cost = sum(item["cost_usd"] for item in run.get("token_usage", []))
         result_cost = result_total_cost(run)
         expected = args.answer if args.with_qa else "ORCH_REAL_CLAUDE_OK"

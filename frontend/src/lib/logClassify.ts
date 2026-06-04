@@ -55,12 +55,14 @@ export function toolResultText(content: unknown): string {
     return content;
   }
   if (Array.isArray(content)) {
-    return content.map((block) => {
-      if (block && typeof block === "object") {
-        return (block as { text?: string }).text ?? "";
-      }
-      return String(block);
-    }).join("");
+    return content
+      .map((block) => {
+        if (block && typeof block === "object") {
+          return (block as { text?: string }).text ?? "";
+        }
+        return String(block);
+      })
+      .join("");
   }
   return content == null ? "" : JSON.stringify(content);
 }

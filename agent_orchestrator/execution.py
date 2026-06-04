@@ -63,7 +63,9 @@ class ExecutionEngine:
         )
         actual_workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / run["id"]
         self.store.update_run(run["id"], workdir_path=str(actual_workdir))
-        snapshot = self.workspace_builder.build(run["id"], process["id"], parent_run=parent, feedback_text=feedback_text)
+        snapshot = self.workspace_builder.build(
+            run["id"], process["id"], parent_run=parent, feedback_text=feedback_text
+        )
         self.store.update_run(run["id"], status="running", input_snapshot_json=snapshot)
         asyncio.create_task(self._run_agent(run["id"], resume=True, feedback_text=feedback_text))
         return self.store.get_run(run["id"])
@@ -95,7 +97,9 @@ class ExecutionEngine:
         await self._publish(run_id, "status", {"status": "rejected", "feedback_text": feedback_text})
         return await self._resume_run(run, feedback_text)
 
-    async def register_question(self, run_id: str, question_text: str, wait: bool, timeout_seconds: int | None) -> dict[str, Any]:
+    async def register_question(
+        self, run_id: str, question_text: str, wait: bool, timeout_seconds: int | None
+    ) -> dict[str, Any]:
         qa = self.store.create_qa(run_id, question_text)
         self.store.update_run(run_id, status="waiting_qa", ended_at=None)
         await self._publish(run_id, "qa", qa)
@@ -178,7 +182,7 @@ class ExecutionEngine:
             await process.wait()
         await self._log(run_id, "error", "Terminated agent process after QA timeout")
 
-    def _select_adapter(self) -> "AgentAdapter":
+    def _select_adapter(self) -> AgentAdapter:
         mode = self.settings.agent_mode.lower()
         command = shlex.split(self.settings.claude_command)
         command_exists = bool(command and shutil.which(command[0]))

@@ -1,7 +1,13 @@
 :root {
   color-scheme: light;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   background: #eef1f4;
   color: #17202a;
 }
@@ -1047,10 +1053,19 @@ textarea {
   background: #111827;
 }
 
-.log-card.agent { border-left-color: #38bdf8; }
-.log-card.tool { border-left-color: #a78bfa; }
-.log-card.system { border-left-color: #64748b; }
-.log-card.error { border-left-color: #f87171; background: #2a1416; }
+.log-card.agent {
+  border-left-color: #38bdf8;
+}
+.log-card.tool {
+  border-left-color: #a78bfa;
+}
+.log-card.system {
+  border-left-color: #64748b;
+}
+.log-card.error {
+  border-left-color: #f87171;
+  background: #2a1416;
+}
 
 .log-card-head {
   display: flex;
@@ -1077,10 +1092,18 @@ textarea {
   flex-shrink: 0;
 }
 
-.log-card.agent .log-cat { color: #38bdf8; }
-.log-card.tool .log-cat { color: #a78bfa; }
-.log-card.system .log-cat { color: #94a3b8; }
-.log-card.error .log-cat { color: #f87171; }
+.log-card.agent .log-cat {
+  color: #38bdf8;
+}
+.log-card.tool .log-cat {
+  color: #a78bfa;
+}
+.log-card.system .log-cat {
+  color: #94a3b8;
+}
+.log-card.error .log-cat {
+  color: #f87171;
+}
 
 .log-title {
   flex: 1;
@@ -1089,8 +1112,12 @@ textarea {
   white-space: nowrap;
 }
 
-.log-card.agent .log-title { color: #e0f2fe; }
-.log-card.error .log-title { color: #fecaca; }
+.log-card.agent .log-title {
+  color: #e0f2fe;
+}
+.log-card.error .log-title {
+  color: #fecaca;
+}
 
 .log-chevron {
   color: #64748b;
@@ -1148,8 +1175,13 @@ textarea {
 }
 
 @keyframes log-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 .log-jump {

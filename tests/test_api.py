@@ -114,9 +114,7 @@ def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
 
 def test_command_includes_model_and_effort() -> None:
     adapter = ClaudeCodeAdapter(["claude", "--print"])
-    command = adapter._command_for_process(
-        {"agent_model": "claude-opus-4-8", "agent_effort": "high"}
-    )
+    command = adapter._command_for_process({"agent_model": "claude-opus-4-8", "agent_effort": "high"})
     assert command[command.index("--model") + 1] == "claude-opus-4-8"
     assert command[command.index("--effort") + 1] == "high"
 
@@ -135,7 +133,13 @@ def test_command_uses_global_permission_defaults() -> None:
     )
     adapter = ClaudeCodeAdapter(["claude", "--print"], settings)
     command = adapter._command_for_process(
-        {"agent_model": "claude-sonnet-4-5", "agent_effort": "", "permission_mode": "", "allowed_tools": "", "disallowed_tools": ""}
+        {
+            "agent_model": "claude-sonnet-4-5",
+            "agent_effort": "",
+            "permission_mode": "",
+            "allowed_tools": "",
+            "disallowed_tools": "",
+        }
     )
     assert command[command.index("--permission-mode") + 1] == "default"
     allowed_at = command.index("--allowedTools")
@@ -274,7 +278,7 @@ def test_skill_description_uses_frontmatter_description(tmp_path: Path) -> None:
     skill_md.write_text(
         "---\n"
         "name: write-report\n"
-        "description: \"Write polished reports from research notes.\"\n"
+        'description: "Write polished reports from research notes."\n'
         "---\n\n"
         "# Write Report\n\n"
         "Fallback body text.\n",

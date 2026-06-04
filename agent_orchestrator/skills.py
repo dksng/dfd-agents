@@ -47,7 +47,10 @@ class SkillRegistry:
         unique: dict[tuple[str, str, str], SkillCandidate] = {}
         for candidate in candidates:
             unique[(candidate.name, candidate.skill_source, candidate.skill_ref)] = candidate
-        return {"skills": [candidate.as_dict() for candidate in sorted(unique.values(), key=lambda s: s.name)], "errors": errors}
+        return {
+            "skills": [candidate.as_dict() for candidate in sorted(unique.values(), key=lambda s: s.name)],
+            "errors": errors,
+        }
 
     def copy_skill(self, skill_name: str, skill_source: str, skill_ref: str, destination: Path) -> None:
         source_path = self._resolve_skill_path(skill_source, skill_ref)
@@ -72,10 +75,7 @@ class SkillRegistry:
                 continue
             skill_dir = skill_md.parent
             rel = skill_dir.relative_to(root).as_posix()
-            if source == "local":
-                skill_ref = str(skill_dir)
-            else:
-                skill_ref = f"{repo_spec}#{rel}"
+            skill_ref = str(skill_dir) if source == "local" else f"{repo_spec}#{rel}"
             candidates.append(
                 SkillCandidate(
                     name=skill_dir.name,

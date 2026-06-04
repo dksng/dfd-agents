@@ -23,7 +23,9 @@ class WorkspaceBuilder:
         self.store = store
         self.skill_registry = skill_registry
 
-    def build(self, run_id: str, process_id: str, *, parent_run: dict[str, Any] | None = None, feedback_text: str = "") -> dict[str, Any]:
+    def build(
+        self, run_id: str, process_id: str, *, parent_run: dict[str, Any] | None = None, feedback_text: str = ""
+    ) -> dict[str, Any]:
         process = self.store.get_process(process_id)
         workflow_id = process["workflow_id"]
         workdir = self.settings.workflow_root / workflow_id / "runs" / run_id

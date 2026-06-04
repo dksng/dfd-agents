@@ -12,10 +12,7 @@ export function simpleLineDiff(before: string, after: string): string {
   }
   const beforeLines = before.split(/\r?\n/);
   const afterLines = after.split(/\r?\n/);
-  return [
-    ...beforeLines.map((line) => `- ${line}`),
-    ...afterLines.map((line) => `+ ${line}`)
-  ].join("\n");
+  return [...beforeLines.map((line) => `- ${line}`), ...afterLines.map((line) => `+ ${line}`)].join("\n");
 }
 
 export function sourceFileName(path: string | null | undefined): string {

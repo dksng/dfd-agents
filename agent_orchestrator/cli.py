@@ -6,7 +6,7 @@ from pathlib import Path
 import uvicorn
 
 from .api import create_app
-from .config import Settings, load_settings
+from .config import load_settings
 
 
 def main() -> None:
@@ -31,4 +31,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

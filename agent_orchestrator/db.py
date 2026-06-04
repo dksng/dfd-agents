@@ -8,8 +8,7 @@ from .agent_options import AGENT_EFFORT_VALUES, PERMISSION_MODE_VALUES
 from .db_connection import connect_sqlite
 from .db_ids import new_id, now_iso
 from .db_json import json_dump, json_load
-from .exceptions import ConflictError, NotFoundError, AppValidationError
-
+from .exceptions import AppValidationError, ConflictError, NotFoundError
 
 _json_dump = json_dump
 _json_load = json_load
@@ -186,11 +185,11 @@ class Store:
             return True
         if self._table_exists(conn, "edge") and "kind" not in self._table_columns(conn, "edge"):
             return True
-        if self._table_exists(conn, "artifact_value") and "artifact_id" not in self._table_columns(conn, "artifact_value"):
+        if self._table_exists(conn, "artifact_value") and "artifact_id" not in self._table_columns(
+            conn, "artifact_value"
+        ):
             return True
-        if not self._table_exists(conn, "artifact"):
-            return True
-        return False
+        return not self._table_exists(conn, "artifact")
 
     def _reset_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = OFF")
@@ -235,7 +234,9 @@ class Store:
             row["layout_json"] = _json_load(row.get("layout_json"), {})
         return rows
 
-    def update_workflow(self, workflow_id: str, *, name: str | None = None, layout_json: dict[str, Any] | None = None) -> dict[str, Any]:
+    def update_workflow(
+        self, workflow_id: str, *, name: str | None = None, layout_json: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         assignments: list[str] = ["updated_at = ?"]
         params: list[Any] = [now_iso()]
         if name is not None:
@@ -254,13 +255,19 @@ class Store:
             workflow = self._fetchone(conn, "SELECT * FROM workflow WHERE id = ?", (workflow_id,))
             if not workflow:
                 raise NotFoundError(f"Workflow not found: {workflow_id}")
-            processes = self._fetchall(conn, "SELECT * FROM process WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
+            processes = self._fetchall(
+                conn, "SELECT * FROM process WHERE workflow_id = ? ORDER BY rowid", (workflow_id,)
+            )
             process_ids = [process["id"] for process in processes]
             skills: dict[str, list[dict[str, Any]]] = {process_id: [] for process_id in process_ids}
             runs: dict[str, list[dict[str, Any]]] = {process_id: [] for process_id in process_ids}
             if process_ids:
                 placeholders = ",".join("?" for _ in process_ids)
-                for skill in self._fetchall(conn, f"SELECT * FROM process_skill WHERE process_id IN ({placeholders}) ORDER BY skill_name", tuple(process_ids)):
+                for skill in self._fetchall(
+                    conn,
+                    f"SELECT * FROM process_skill WHERE process_id IN ({placeholders}) ORDER BY skill_name",
+                    tuple(process_ids),
+                ):
                     skills.setdefault(skill["process_id"], []).append(skill)
                 run_rows = self._fetchall(
                     conn,
@@ -298,7 +305,9 @@ class Store:
                     run["cache_write"] = usage.get("cache_write", 0)
                     run["cost_usd"] = usage.get("cost_usd", 0)
                     runs.setdefault(run["process_id"], []).append(run)
-            artifacts = self._fetchall(conn, "SELECT * FROM artifact WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
+            artifacts = self._fetchall(
+                conn, "SELECT * FROM artifact WHERE workflow_id = ? ORDER BY rowid", (workflow_id,)
+            )
             for artifact in artifacts:
                 artifact["spec_json"] = _json_load(artifact.get("spec_json"), {})
             edges = self._fetchall(conn, "SELECT * FROM edge WHERE workflow_id = ? ORDER BY rowid", (workflow_id,))
@@ -543,7 +552,9 @@ class Store:
             process = self._fetchone(conn, "SELECT * FROM process WHERE id = ?", (process_id,))
             if not process:
                 raise NotFoundError(f"Process not found: {process_id}")
-            skills = self._fetchall(conn, "SELECT * FROM process_skill WHERE process_id = ? ORDER BY skill_name", (process_id,))
+            skills = self._fetchall(
+                conn, "SELECT * FROM process_skill WHERE process_id = ? ORDER BY skill_name", (process_id,)
+            )
         process["skills"] = skills
         return process
 
@@ -710,7 +721,9 @@ class Store:
         process_id: str,
         artifact_id: str,
     ) -> bool:
-        edges = self._fetchall(conn, "SELECT kind, process_id, artifact_id FROM edge WHERE workflow_id = ?", (workflow_id,))
+        edges = self._fetchall(
+            conn, "SELECT kind, process_id, artifact_id FROM edge WHERE workflow_id = ?", (workflow_id,)
+        )
         edges.append({"kind": kind, "process_id": process_id, "artifact_id": artifact_id})
         producers: dict[str, str] = {}
         consumers: dict[str, list[str]] = {}
@@ -741,10 +754,7 @@ class Store:
             active.remove(process)
             return False
 
-        for process in list(adjacency):
-            if visit(process):
-                return True
-        return False
+        return any(visit(process) for process in list(adjacency))
 
     def delete_edge(self, edge_id: str) -> None:
         with self.connect() as conn:
