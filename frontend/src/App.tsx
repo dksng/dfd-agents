@@ -22,12 +22,13 @@ import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
 import { useRunStream } from "./hooks/useRunStream";
+import { useSkills } from "./hooks/useSkills";
 import { artifactContent } from "./lib/artifactContent";
 import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
+import { skillKey } from "./lib/skills";
 import type {
-  AppSettings,
   ArtifactNode,
   ArtifactType,
   CostSummary,
@@ -52,28 +53,6 @@ function totalUsage(run: RunDetail | null): CostSummary {
   );
 }
 
-function skillKey(skill: Pick<SkillCandidate, "skill_source" | "skill_ref">): string {
-  return `${skill.skill_source}:${skill.skill_ref}`;
-}
-
-function skillMatchesSearch(skill: SkillCandidate, query: string): boolean {
-  const trimmed = query.trim().toLowerCase();
-  if (!trimmed) {
-    return true;
-  }
-  const haystack = [skill.name, skill.description, skill.skill_source, skill.skill_ref, skill.path]
-    .join("\n")
-    .toLowerCase();
-  return trimmed.split(/\s+/).every((term) => haystack.includes(term));
-}
-
-function parseRepoDraft(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
   if (!workflow) {
     return [];
@@ -92,7 +71,6 @@ export function App() {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
   const [processDraft, setProcessDraft] = useState<ProcessNode | null>(null);
   const [artifactDraft, setArtifactDraft] = useState<ArtifactNode | null>(null);
-  const [skills, setSkills] = useState<SkillCandidate[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string>("");
@@ -106,19 +84,11 @@ export function App() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [goalCursor, setGoalCursor] = useState(0);
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState("");
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [settingsMessage, setSettingsMessage] = useState("");
-  const [skillErrors, setSkillErrors] = useState<string[]>([]);
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
-  const [skillSearch, setSkillSearch] = useState("");
-  const [expandedSkillKeys, setExpandedSkillKeys] = useState<Set<string>>(() => new Set());
   const goalRef = useRef<HTMLTextAreaElement | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workflowImportRef = useRef<HTMLInputElement | null>(null);
@@ -206,17 +176,26 @@ export function App() {
     });
   }, []);
 
-  const toggleSkillDetails = useCallback((key: string) => {
-    setExpandedSkillKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }, []);
+  const {
+    appSettings,
+    expandedSkillKeys,
+    loadInitialSkillState,
+    openSettingsModal,
+    refreshSkills,
+    saveSettings,
+    setSettingsDraft,
+    setSettingsOpen,
+    setSkillSearch,
+    settingsDraft,
+    settingsMessage,
+    settingsOpen,
+    settingsSaving,
+    skillErrors,
+    skillSearch,
+    skills,
+    toggleSkillDetails,
+    visibleSkills
+  } = useSkills({ processSkills: processDraft?.skills ?? [], setError });
 
   const loadInitial = useCallback(async () => {
     try {
@@ -228,12 +207,7 @@ export function App() {
       setWorkflows(list);
       const full = await loadWorkflow(list[0].id);
       setSelectedProcessId(full.processes[0]?.id ?? "");
-      const skillResponse = await api.listSkills(false);
-      setSkills(skillResponse.skills);
-      setSkillErrors(skillResponse.errors ?? []);
-      const runtimeSettings = await api.getSettings();
-      setAppSettings(runtimeSettings);
-      setSettingsDraft(runtimeSettings.skill_repos.join("\n"));
+      await loadInitialSkillState();
       api
         .getHealth()
         .then(setHealth)
@@ -241,7 +215,7 @@ export function App() {
     } catch (exc) {
       setError(String(exc));
     }
-  }, [loadWorkflow]);
+  }, [loadInitialSkillState, loadWorkflow]);
 
   useEffect(() => {
     void loadInitial();
@@ -310,23 +284,6 @@ export function App() {
     },
     [loadWorkflow]
   );
-
-  const visibleSkills = useMemo(() => {
-    const selectedKeys = new Set(
-      (processDraft?.skills ?? []).map((skill) => `${skill.skill_source}:${skill.skill_ref}`)
-    );
-    const selected: SkillCandidate[] = [];
-    const unselected: SkillCandidate[] = [];
-    for (const skill of skills) {
-      const isSelected = selectedKeys.has(skillKey(skill));
-      if (isSelected) {
-        selected.push(skill);
-      } else if (skillMatchesSearch(skill, skillSearch)) {
-        unselected.push(skill);
-      }
-    }
-    return [...selected, ...unselected];
-  }, [processDraft?.skills, skillSearch, skills]);
 
   // 選択した工程が「変わったとき」だけドラフトを読み込む（id をキーに）。
   // workflow の再取得（autosave/コストポーリング）では再読込しないので入力中も消えない。
@@ -913,51 +870,6 @@ export function App() {
       setError(String(exc));
     } finally {
       setDiffLoading(false);
-    }
-  }
-
-  async function openSettingsModal() {
-    setSettingsOpen(true);
-    setSettingsMessage("");
-    try {
-      const runtimeSettings = await api.getSettings();
-      setAppSettings(runtimeSettings);
-      setSettingsDraft(runtimeSettings.skill_repos.join("\n"));
-    } catch (exc) {
-      setError(String(exc));
-    }
-  }
-
-  async function saveSettings() {
-    setSettingsSaving(true);
-    setSettingsMessage("");
-    try {
-      const updated = await api.updateSettings({ skill_repos: parseRepoDraft(settingsDraft) });
-      setAppSettings(updated);
-      setSettingsDraft(updated.skill_repos.join("\n"));
-      const skillResponse = await api.listSkills(true);
-      setSkills(skillResponse.skills);
-      setSkillErrors(skillResponse.errors ?? []);
-      setSettingsMessage(`${skillResponse.skills.length} skills available.`);
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      setSettingsSaving(false);
-    }
-  }
-
-  async function refreshSkills() {
-    setSettingsSaving(true);
-    setSettingsMessage("");
-    try {
-      const skillResponse = await api.listSkills(true);
-      setSkills(skillResponse.skills);
-      setSkillErrors(skillResponse.errors ?? []);
-      setSettingsMessage(`${skillResponse.skills.length} skills available.`);
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      setSettingsSaving(false);
     }
   }
 

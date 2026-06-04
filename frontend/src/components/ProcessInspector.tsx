@@ -1,14 +1,11 @@
 import { ChevronDown, ChevronRight, Play, Save, Search, Trash2 } from "lucide-react";
 import type { RefObject } from "react";
+import { skillKey } from "../lib/skills";
 import { PERMISSION_MODES } from "../types";
 import type { ArtifactNode, HealthInfo, ProcessNode, SkillCandidate } from "../types";
 
 const MODEL_OPTIONS = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"];
 const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
-
-function skillKey(skill: Pick<SkillCandidate, "skill_source" | "skill_ref">): string {
-  return `${skill.skill_source}:${skill.skill_ref}`;
-}
 
 type ProcessInspectorProps = {
   processDraft: ProcessNode | null;
