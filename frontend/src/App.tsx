@@ -12,6 +12,7 @@ import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useDrafts } from "./hooks/useDrafts";
 import { useFlowGraph } from "./hooks/useFlowGraph";
 import { useGoalAutocomplete } from "./hooks/useGoalAutocomplete";
 import { useHealth } from "./hooks/useHealth";
@@ -20,19 +21,9 @@ import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkflowActions } from "./hooks/useWorkflowActions";
 import { useWorkflowName } from "./hooks/useWorkflowName";
-import { normalizeGoalForDisplay } from "./lib/goal";
-import { artifactPayload, processPayload } from "./lib/payloads";
-import { skillKey } from "./lib/skills";
-import type {
-  ArtifactNode,
-  ArtifactType,
-  CostSummary,
-  ProcessNode,
-  RunDetail,
-  RunSummary,
-  SkillCandidate,
-  Workflow
-} from "./types";
+import { processPayload } from "./lib/payloads";
+import { artifactsConnectedToProcess } from "./lib/workflow";
+import type { ArtifactType, CostSummary, RunDetail, RunSummary, Workflow } from "./types";
 
 function totalUsage(run: RunDetail | null): CostSummary {
   return (run?.token_usage ?? []).reduce(
@@ -47,43 +38,22 @@ function totalUsage(run: RunDetail | null): CostSummary {
   );
 }
 
-function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
-  if (!workflow) {
-    return [];
-  }
-  const connectedIds = new Set(
-    workflow.edges.filter((edge) => edge.process_id === processId).map((edge) => edge.artifact_id)
-  );
-  return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
-}
-
 export function App() {
   const { fitView, screenToFlowPosition, setCenter } = useReactFlow();
   const [selectedProcessId, setSelectedProcessId] = useState<string>("");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
-  const [processDraft, setProcessDraft] = useState<ProcessNode | null>(null);
-  const [artifactDraft, setArtifactDraft] = useState<ArtifactNode | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string>("");
-  const [agentsBase, setAgentsBase] = useState("");
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workflowIdRef = useRef<string | null>(null);
-  const savedProcessRef = useRef<string>("");
-  const savedArtifactRef = useRef<string>("");
-  const processSaveSeqRef = useRef(0);
-  const artifactSaveSeqRef = useRef(0);
   const explicitRunSelectionRef = useRef("");
-  const processSaveAbortRef = useRef<AbortController | null>(null);
-  const artifactSaveAbortRef = useRef<AbortController | null>(null);
 
   const clearWorkflowSelection = useCallback(() => {
     setSelectedRun(null);
     setSelectedProcessId("");
     setSelectedArtifactId("");
-    setProcessDraft(null);
-    setArtifactDraft(null);
   }, []);
 
   const selectLoadedWorkflow = useCallback((loaded: Workflow, mode: "processOnly" | "artifactFallback") => {
@@ -187,47 +157,6 @@ export function App() {
     workflow
   });
 
-  const {
-    appSettings,
-    expandedSkillKeys,
-    loadInitialSkillState,
-    openSettingsModal,
-    refreshSkills,
-    saveSettings,
-    setSettingsDraft,
-    setSettingsOpen,
-    setSkillSearch,
-    settingsDraft,
-    settingsMessage,
-    settingsOpen,
-    settingsSaving,
-    skillErrors,
-    skillSearch,
-    skills,
-    toggleSkillDetails,
-    visibleSkills
-  } = useSkills({ processSkills: processDraft?.skills ?? [], setError });
-
-  const { goalArtifacts, goalRef, insertArtifactToken, onGoalChange, suggestOpen } = useGoalAutocomplete({
-    processDraft,
-    setProcessDraft,
-    workflow
-  });
-
-  const loadInitial = useCallback(async () => {
-    try {
-      await loadInitialWorkflow();
-      await loadInitialSkillState();
-      void refreshHealth();
-    } catch (exc) {
-      setError(String(exc));
-    }
-  }, [loadInitialSkillState, loadInitialWorkflow, refreshHealth]);
-
-  useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
-
   useEffect(() => {
     workflowIdRef.current = workflow?.id ?? null;
   }, [workflow?.id]);
@@ -291,6 +220,74 @@ export function App() {
     workflowId: workflow?.id ?? null
   });
 
+  const {
+    agentsBase,
+    artifactDraft,
+    processDraft,
+    saveArtifact,
+    saveProcess,
+    setArtifactDraft,
+    setProcessDraft,
+    toggleSkill,
+    updateArtifactDraft,
+    updateProcessDraft,
+    uploadArtifactSourceFile
+  } = useDrafts({
+    explicitRunSelectionRef,
+    loadWorkflow,
+    selectedArtifact,
+    selectedArtifactHasProducer: Boolean(selectedArtifactProducer),
+    selectedArtifactId,
+    selectedProcess,
+    selectedProcessId,
+    setError,
+    setRunDiffPair,
+    setSelectedRun,
+    workflow,
+    workflowIdRef
+  });
+
+  const {
+    appSettings,
+    expandedSkillKeys,
+    loadInitialSkillState,
+    openSettingsModal,
+    refreshSkills,
+    saveSettings,
+    setSettingsDraft,
+    setSettingsOpen,
+    setSkillSearch,
+    settingsDraft,
+    settingsMessage,
+    settingsOpen,
+    settingsSaving,
+    skillErrors,
+    skillSearch,
+    skills,
+    toggleSkillDetails,
+    visibleSkills
+  } = useSkills({ processSkills: processDraft?.skills ?? [], setError });
+
+  const { goalArtifacts, goalRef, insertArtifactToken, onGoalChange, suggestOpen } = useGoalAutocomplete({
+    processDraft,
+    setProcessDraft,
+    workflow
+  });
+
+  const loadInitial = useCallback(async () => {
+    try {
+      await loadInitialWorkflow();
+      await loadInitialSkillState();
+      void refreshHealth();
+    } catch (exc) {
+      setError(String(exc));
+    }
+  }, [loadInitialSkillState, loadInitialWorkflow, refreshHealth]);
+
+  useEffect(() => {
+    void loadInitial();
+  }, [loadInitial]);
+
   useRunStream({
     selectedRun,
     setSelectedRun,
@@ -330,138 +327,6 @@ export function App() {
     workflow
   });
 
-  // 選択した工程が「変わったとき」だけドラフトを読み込む（id をキーに）。
-  // workflow の再取得（autosave/コストポーリング）では再読込しないので入力中も消えない。
-  useEffect(() => {
-    if (!selectedProcessId) {
-      setProcessDraft(null);
-      savedProcessRef.current = "";
-      setAgentsBase("");
-      setSelectedRun(null);
-      return;
-    }
-    if (!selectedProcess) {
-      setProcessDraft(null);
-      savedProcessRef.current = "";
-      setAgentsBase("");
-      setSelectedRun(null);
-      return;
-    }
-    const draft = structuredClone(selectedProcess);
-    const connectedArtifacts = artifactsConnectedToProcess(workflow, selectedProcess.id);
-    draft.goal_md = normalizeGoalForDisplay(draft.goal_md, connectedArtifacts);
-    setProcessDraft(draft);
-    savedProcessRef.current = JSON.stringify(processPayload(draft, connectedArtifacts));
-    setRunDiffPair(selectedProcess.runs?.[1]?.id ?? "", selectedProcess.runs?.[0]?.id ?? "");
-    api
-      .getAgentsBase(selectedProcess.template_id || "base")
-      .then((res) => setAgentsBase(res.content))
-      .catch(() => setAgentsBase(""));
-    const explicitRunId = explicitRunSelectionRef.current;
-    const runToLoad = explicitRunId
-      ? selectedProcess.runs?.find((run) => run.id === explicitRunId)
-      : selectedProcess.runs?.[0];
-    if (runToLoad) {
-      explicitRunSelectionRef.current = "";
-      void api
-        .getRun(runToLoad.id)
-        .then(setSelectedRun)
-        .catch((exc) => setError(String(exc)));
-    } else {
-      setSelectedRun(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProcessId, selectedProcess?.id]);
-
-  useEffect(() => {
-    if (!selectedArtifactId) {
-      setArtifactDraft(null);
-      savedArtifactRef.current = "";
-      return;
-    }
-    if (!selectedArtifact) {
-      setArtifactDraft(null);
-      savedArtifactRef.current = "";
-      return;
-    }
-    const draft = structuredClone(selectedArtifact);
-    setArtifactDraft(draft);
-    savedArtifactRef.current = JSON.stringify(artifactPayload(draft));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedArtifactId, selectedArtifact?.id]);
-
-  // 工程ドラフトのデバウンス自動保存。
-  useEffect(() => {
-    if (!processDraft) {
-      return;
-    }
-    const connectedArtifacts = artifactsConnectedToProcess(workflow, processDraft.id);
-    const payload = processPayload(processDraft, connectedArtifacts);
-    const serialized = JSON.stringify(payload);
-    if (serialized === savedProcessRef.current) {
-      return;
-    }
-    processSaveAbortRef.current?.abort();
-    const controller = new AbortController();
-    const saveSeq = ++processSaveSeqRef.current;
-    const timer = window.setTimeout(() => {
-      void api
-        .updateProcessConfig(processDraft.id, payload, { signal: controller.signal })
-        .then(() => {
-          if (controller.signal.aborted || saveSeq !== processSaveSeqRef.current) {
-            return undefined;
-          }
-          savedProcessRef.current = serialized;
-          if (workflowIdRef.current) {
-            return loadWorkflow(workflowIdRef.current);
-          }
-          return undefined;
-        })
-        .catch((exc) => {
-          if (controller.signal.aborted) {
-            return;
-          }
-          setError(String(exc));
-        });
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [processDraft, workflow, loadWorkflow]);
-
-  // 成果物ドラフトのデバウンス自動保存。
-  useEffect(() => {
-    if (!artifactDraft) {
-      return;
-    }
-    const serialized = JSON.stringify(artifactPayload(artifactDraft));
-    if (serialized === savedArtifactRef.current) {
-      return;
-    }
-    artifactSaveAbortRef.current?.abort();
-    const controller = new AbortController();
-    const saveSeq = ++artifactSaveSeqRef.current;
-    const timer = window.setTimeout(() => {
-      void api
-        .updateArtifact(artifactDraft.id, artifactPayload(artifactDraft), { signal: controller.signal })
-        .then(() => {
-          if (controller.signal.aborted || saveSeq !== artifactSaveSeqRef.current) {
-            return undefined;
-          }
-          savedArtifactRef.current = serialized;
-          if (workflowIdRef.current) {
-            return loadWorkflow(workflowIdRef.current);
-          }
-          return undefined;
-        })
-        .catch((exc) => {
-          if (controller.signal.aborted) {
-            return;
-          }
-          setError(String(exc));
-        });
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [artifactDraft, loadWorkflow]);
-
   async function addProcess() {
     if (!workflow) {
       return;
@@ -489,46 +354,6 @@ export function App() {
     });
     await loadWorkflow(workflow.id);
     selectArtifact(created.id);
-  }
-
-  async function saveProcess() {
-    if (!processDraft || !workflow) {
-      return;
-    }
-    processSaveAbortRef.current?.abort();
-    const payload = processPayload(processDraft, artifactsConnectedToProcess(workflow, processDraft.id));
-    ++processSaveSeqRef.current;
-    savedProcessRef.current = JSON.stringify(payload);
-    await api.updateProcessConfig(processDraft.id, payload);
-    await loadWorkflow(workflow.id);
-  }
-
-  async function saveArtifact() {
-    if (!artifactDraft || !workflow) {
-      return;
-    }
-    artifactSaveAbortRef.current?.abort();
-    const payload = artifactPayload(artifactDraft);
-    ++artifactSaveSeqRef.current;
-    savedArtifactRef.current = JSON.stringify(payload);
-    await api.updateArtifact(artifactDraft.id, payload);
-    await loadWorkflow(workflow.id);
-  }
-
-  async function uploadArtifactSourceFile(file: File | null) {
-    if (!file || !artifactDraft || artifactDraft.type !== "file" || selectedArtifactProducer) {
-      return;
-    }
-    try {
-      const updated = await api.uploadArtifactSourceFile(artifactDraft.id, file);
-      setArtifactDraft(updated);
-      savedArtifactRef.current = JSON.stringify(artifactPayload(updated));
-      if (workflow) {
-        await loadWorkflow(workflow.id);
-      }
-    } catch (exc) {
-      setError(String(exc));
-    }
   }
 
   async function deleteSelectedProcess() {
@@ -655,37 +480,6 @@ export function App() {
       await api.updateArtifact(nodeId, { pos_x: x, pos_y: y });
     }
     await loadWorkflow(workflow.id);
-  }
-
-  function updateProcessDraft<K extends keyof ProcessNode>(key: K, value: ProcessNode[K]) {
-    setProcessDraft((current) => (current ? { ...current, [key]: value } : current));
-  }
-
-  function updateArtifactDraft<K extends keyof ArtifactNode>(key: K, value: ArtifactNode[K]) {
-    setArtifactDraft((current) => (current ? { ...current, [key]: value } : current));
-  }
-
-  function toggleSkill(skill: SkillCandidate, checked: boolean) {
-    setProcessDraft((current) => {
-      if (!current) {
-        return current;
-      }
-      const existing = current.skills.filter((item) => `${item.skill_source}:${item.skill_ref}` !== skillKey(skill));
-      if (!checked) {
-        return { ...current, skills: existing };
-      }
-      return {
-        ...current,
-        skills: [
-          ...existing,
-          {
-            skill_name: skill.name,
-            skill_source: skill.skill_source,
-            skill_ref: skill.skill_ref
-          }
-        ]
-      };
-    });
   }
 
   const usage = totalUsage(selectedRun);
