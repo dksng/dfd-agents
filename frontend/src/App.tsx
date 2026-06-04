@@ -1,12 +1,4 @@
-import {
-  applyNodeChanges,
-  MarkerType,
-  type Connection,
-  type Edge,
-  type Node,
-  type NodeChange,
-  useReactFlow
-} from "@xyflow/react";
+import { type Connection, useReactFlow } from "@xyflow/react";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
@@ -14,13 +6,13 @@ import { api } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ArtifactInspector } from "./components/ArtifactInspector";
 import { CanvasPanel, type CanvasNodeContextMenu } from "./components/CanvasPanel";
-import type { FlowNodeData } from "./components/FlowNodes";
 import { LeftPanel } from "./components/LeftPanel";
 import { ProcessInspector } from "./components/ProcessInspector";
 import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useFlowGraph } from "./hooks/useFlowGraph";
 import { useGoalAutocomplete } from "./hooks/useGoalAutocomplete";
 import { useHealth } from "./hooks/useHealth";
 import { useRunReview } from "./hooks/useRunReview";
@@ -77,7 +69,6 @@ export function App() {
   const [error, setError] = useState<string>("");
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
-  const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
@@ -88,7 +79,6 @@ export function App() {
   const processSaveSeqRef = useRef(0);
   const artifactSaveSeqRef = useRef(0);
   const workflowSaveSeqRef = useRef(0);
-  const fittedWorkflowRef = useRef("");
   const explicitRunSelectionRef = useRef("");
   const processSaveAbortRef = useRef<AbortController | null>(null);
   const artifactSaveAbortRef = useRef<AbortController | null>(null);
@@ -308,6 +298,16 @@ export function App() {
     [loadWorkflow]
   );
 
+  const { edges, nodes, onNodesChange } = useFlowGraph({
+    fitView,
+    onRunProcess: runProcess,
+    onSelectArtifact: selectArtifact,
+    onSelectProcess: selectProcess,
+    selectedArtifactId,
+    selectedProcessId,
+    workflow
+  });
+
   // 選択した工程が「変わったとき」だけドラフトを読み込む（id をキーに）。
   // workflow の再取得（autosave/コストポーリング）では再読込しないので入力中も消えない。
   useEffect(() => {
@@ -468,88 +468,6 @@ export function App() {
     }, 700);
     return () => window.clearTimeout(timer);
   }, [workflowNameDraft, workflow]);
-
-  const computedNodes = useMemo<Node<FlowNodeData>[]>(() => {
-    const producerByArtifact = new Map<string, string>();
-    const consumersByArtifact = new Map<string, number>();
-    const inputCountByProcess = new Map<string, number>();
-    const outputCountByProcess = new Map<string, number>();
-    for (const edge of workflow?.edges ?? []) {
-      if (edge.kind === "produces") {
-        producerByArtifact.set(edge.artifact_id, edge.process_id);
-        outputCountByProcess.set(edge.process_id, (outputCountByProcess.get(edge.process_id) ?? 0) + 1);
-      } else {
-        consumersByArtifact.set(edge.artifact_id, (consumersByArtifact.get(edge.artifact_id) ?? 0) + 1);
-        inputCountByProcess.set(edge.process_id, (inputCountByProcess.get(edge.process_id) ?? 0) + 1);
-      }
-    }
-    const processNameById = new Map((workflow?.processes ?? []).map((process) => [process.id, process.name]));
-    return [
-      ...(workflow?.processes ?? []).map((process) => ({
-        id: process.id,
-        type: "process",
-        position: { x: process.pos_x, y: process.pos_y },
-        data: {
-          process,
-          selected: process.id === selectedProcessId,
-          inputCount: inputCountByProcess.get(process.id) ?? 0,
-          outputCount: outputCountByProcess.get(process.id) ?? 0,
-          onSelect: selectProcess,
-          onRun: (id: string) => void runProcess(id)
-        }
-      })),
-      ...(workflow?.artifacts ?? []).map((artifact) => {
-        const producerId = producerByArtifact.get(artifact.id);
-        return {
-          id: artifact.id,
-          type: "artifact",
-          position: { x: artifact.pos_x, y: artifact.pos_y },
-          data: {
-            artifact,
-            selected: artifact.id === selectedArtifactId,
-            producerName: producerId ? processNameById.get(producerId) : undefined,
-            consumerCount: consumersByArtifact.get(artifact.id) ?? 0,
-            onSelect: selectArtifact
-          }
-        };
-      })
-    ];
-  }, [runProcess, selectArtifact, selectProcess, selectedArtifactId, selectedProcessId, workflow]);
-
-  // ReactFlow を制御コンポーネント化：computedNodes を同期しつつ、ドラッグ中の
-  // 位置変更は onNodesChange でローカル適用する（これが無いとドラッグで動かない）。
-  useEffect(() => {
-    setNodes(computedNodes);
-  }, [computedNodes]);
-
-  useEffect(() => {
-    if (!workflow?.id || nodes.length === 0 || fittedWorkflowRef.current === workflow.id) {
-      return;
-    }
-    fittedWorkflowRef.current = workflow.id;
-    const frame = window.requestAnimationFrame(() => {
-      fitView({ padding: 0.25, duration: 0 });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [fitView, nodes.length, workflow?.id]);
-
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((current) => applyNodeChanges(changes, current) as Node<FlowNodeData>[]);
-  }, []);
-
-  const edges = useMemo<Edge[]>(
-    () =>
-      (workflow?.edges ?? []).map((edge) => ({
-        id: edge.id,
-        source: edge.kind === "produces" ? edge.process_id : edge.artifact_id,
-        target: edge.kind === "produces" ? edge.artifact_id : edge.process_id,
-        sourceHandle: edge.kind === "produces" ? "produces" : "consumes",
-        targetHandle: edge.kind === "produces" ? "produces" : "consumes",
-        markerEnd: { type: MarkerType.ArrowClosed },
-        className: `workflow-edge ${edge.kind}`
-      })),
-    [workflow]
-  );
 
   async function selectWorkflow(workflowId: string) {
     if (!workflowId) {
