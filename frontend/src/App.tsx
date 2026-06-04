@@ -10,7 +10,7 @@ import {
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, artifactDownloadUrl } from "./api";
+import { api } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ArtifactInspector } from "./components/ArtifactInspector";
 import { CanvasPanel, type CanvasNodeContextMenu } from "./components/CanvasPanel";
@@ -20,15 +20,16 @@ import { ProcessInspector } from "./components/ProcessInspector";
 import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
+import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useRunStream } from "./hooks/useRunStream";
+import { artifactContent } from "./lib/artifactContent";
 import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
-import { useRunStream } from "./hooks/useRunStream";
 import type {
   AppSettings,
   ArtifactNode,
   ArtifactType,
-  ArtifactValue,
   CostSummary,
   HealthInfo,
   ProcessNode,
@@ -73,20 +74,6 @@ function parseRepoDraft(value: string): string[] {
     .filter(Boolean);
 }
 
-async function artifactContent(run: Pick<RunDetail, "id">, artifact: ArtifactValue): Promise<string> {
-  if (artifact.artifact_type === "text") {
-    return artifact.text_value ?? "";
-  }
-  if (artifact.artifact_type === "url") {
-    return artifact.url ?? "";
-  }
-  const response = await fetch(artifactDownloadUrl(run.id, artifact.artifact_id));
-  if (!response.ok) {
-    return `[download failed: ${response.status}]`;
-  }
-  return response.text();
-}
-
 function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
   if (!workflow) {
     return [];
@@ -128,10 +115,6 @@ export function App() {
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
-  const [artifactApprovedRun, setArtifactApprovedRun] = useState<RunDetail | null>(null);
-  const [artifactApprovedValue, setArtifactApprovedValue] = useState<ArtifactValue | null>(null);
-  const [artifactPreviewText, setArtifactPreviewText] = useState("");
-  const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const [skillSearch, setSkillSearch] = useState("");
@@ -145,7 +128,6 @@ export function App() {
   const processSaveSeqRef = useRef(0);
   const artifactSaveSeqRef = useRef(0);
   const workflowSaveSeqRef = useRef(0);
-  const artifactPreviewSeqRef = useRef(0);
   const fittedWorkflowRef = useRef("");
   const explicitRunSelectionRef = useRef("");
   const reviewAutoCollapseKeyRef = useRef("");
@@ -310,6 +292,25 @@ export function App() {
     setError
   });
 
+  const { artifactApprovedRun, artifactApprovedValue, artifactPreviewText, artifactPreviewLoading } =
+    useArtifactPreview({
+      workflow,
+      selectedArtifactId,
+      setError
+    });
+
+  const runProcess = useCallback(
+    async (processId: string) => {
+      const run = await api.runProcess(processId);
+      setSelectedRun(run);
+      const workflowId = workflowIdRef.current;
+      if (workflowId) {
+        await loadWorkflow(workflowId);
+      }
+    },
+    [loadWorkflow]
+  );
+
   const visibleSkills = useMemo(() => {
     const selectedKeys = new Set(
       (processDraft?.skills ?? []).map((skill) => `${skill.skill_source}:${skill.skill_ref}`)
@@ -388,56 +389,6 @@ export function App() {
     savedArtifactRef.current = JSON.stringify(artifactPayload(draft));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedArtifactId, selectedArtifact?.id]);
-
-  useEffect(() => {
-    const seq = ++artifactPreviewSeqRef.current;
-    setArtifactApprovedRun(null);
-    setArtifactApprovedValue(null);
-    setArtifactPreviewText("");
-    setArtifactPreviewLoading(false);
-
-    if (!workflow || !selectedArtifactId) {
-      return;
-    }
-    const producerEdge = workflow.edges.find(
-      (edge) => edge.kind === "produces" && edge.artifact_id === selectedArtifactId
-    );
-    const producer = producerEdge ? workflow.processes.find((process) => process.id === producerEdge.process_id) : null;
-    const approvedRun = producer?.runs.find((run) => run.status === "approved");
-    if (!approvedRun) {
-      return;
-    }
-
-    setArtifactPreviewLoading(true);
-    void api
-      .getRun(approvedRun.id)
-      .then(async (run) => {
-        if (seq !== artifactPreviewSeqRef.current) {
-          return;
-        }
-        const value = run.artifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ?? null;
-        setArtifactApprovedRun(run);
-        setArtifactApprovedValue(value);
-        if (!value) {
-          setArtifactPreviewText("");
-          return;
-        }
-        const content = await artifactContent(run, value);
-        if (seq === artifactPreviewSeqRef.current) {
-          setArtifactPreviewText(content);
-        }
-      })
-      .catch((exc) => {
-        if (seq === artifactPreviewSeqRef.current) {
-          setError(String(exc));
-        }
-      })
-      .finally(() => {
-        if (seq === artifactPreviewSeqRef.current) {
-          setArtifactPreviewLoading(false);
-        }
-      });
-  }, [selectedArtifactId, workflow]);
 
   // 工程ドラフトのデバウンス自動保存。
   useEffect(() => {
@@ -602,7 +553,7 @@ export function App() {
         };
       })
     ];
-  }, [selectArtifact, selectProcess, selectedArtifactId, selectedProcessId, workflow]);
+  }, [runProcess, selectArtifact, selectProcess, selectedArtifactId, selectedProcessId, workflow]);
 
   // ReactFlow を制御コンポーネント化：computedNodes を同期しつつ、ドラッグ中の
   // 位置変更は onNodesChange でローカル適用する（これが無いとドラッグで動かない）。
@@ -718,14 +669,6 @@ export function App() {
       }
     } catch (exc) {
       setError(String(exc));
-    }
-  }
-
-  async function runProcess(processId: string) {
-    const run = await api.runProcess(processId);
-    setSelectedRun(run);
-    if (workflow) {
-      await loadWorkflow(workflow.id);
     }
   }
 
