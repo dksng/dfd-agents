@@ -18,8 +18,8 @@ import { useHealth } from "./hooks/useHealth";
 import { useRunReview } from "./hooks/useRunReview";
 import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
+import { useWorkflowActions } from "./hooks/useWorkflowActions";
 import { useWorkflowName } from "./hooks/useWorkflowName";
-import { downloadJsonDocument } from "./lib/format";
 import { normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
 import { skillKey } from "./lib/skills";
@@ -59,20 +59,16 @@ function artifactsConnectedToProcess(workflow: Workflow | null, processId: strin
 
 export function App() {
   const { fitView, screenToFlowPosition, setCenter } = useReactFlow();
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [selectedProcessId, setSelectedProcessId] = useState<string>("");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
   const [processDraft, setProcessDraft] = useState<ProcessNode | null>(null);
   const [artifactDraft, setArtifactDraft] = useState<ArtifactNode | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
-  const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string>("");
   const [agentsBase, setAgentsBase] = useState("");
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
-  const workflowImportRef = useRef<HTMLInputElement | null>(null);
   const workflowIdRef = useRef<string | null>(null);
   const savedProcessRef = useRef<string>("");
   const savedArtifactRef = useRef<string>("");
@@ -82,12 +78,42 @@ export function App() {
   const processSaveAbortRef = useRef<AbortController | null>(null);
   const artifactSaveAbortRef = useRef<AbortController | null>(null);
 
-  const loadWorkflow = useCallback(async (id: string) => {
-    const data = await api.getWorkflow(id);
-    setWorkflow(data);
-    setCost(await api.workflowCost(id));
-    return data;
+  const clearWorkflowSelection = useCallback(() => {
+    setSelectedRun(null);
+    setSelectedProcessId("");
+    setSelectedArtifactId("");
+    setProcessDraft(null);
+    setArtifactDraft(null);
   }, []);
+
+  const selectLoadedWorkflow = useCallback((loaded: Workflow, mode: "processOnly" | "artifactFallback") => {
+    setSelectedProcessId(loaded.processes[0]?.id ?? "");
+    setSelectedArtifactId(
+      mode === "artifactFallback" && loaded.processes.length === 0 ? (loaded.artifacts[0]?.id ?? "") : ""
+    );
+  }, []);
+
+  const {
+    cost,
+    createWorkflow,
+    deleteCurrentWorkflow,
+    exportCurrentWorkflow,
+    importWorkflowFile,
+    loadInitialWorkflow,
+    loadWorkflow,
+    refreshWorkflow,
+    selectWorkflow,
+    setCost,
+    setWorkflow,
+    setWorkflows,
+    workflow,
+    workflowImportRef,
+    workflows
+  } = useWorkflowActions({
+    onClearSelection: clearWorkflowSelection,
+    onWorkflowLoaded: selectLoadedWorkflow,
+    setError
+  });
 
   const centerFlowItem = useCallback(
     (id: string) => {
@@ -190,20 +216,13 @@ export function App() {
 
   const loadInitial = useCallback(async () => {
     try {
-      let list = await api.listWorkflows();
-      if (list.length === 0) {
-        const created = await api.createWorkflow("Default Workflow");
-        list = [created];
-      }
-      setWorkflows(list);
-      const full = await loadWorkflow(list[0].id);
-      setSelectedProcessId(full.processes[0]?.id ?? "");
+      await loadInitialWorkflow();
       await loadInitialSkillState();
       void refreshHealth();
     } catch (exc) {
       setError(String(exc));
     }
-  }, [loadInitialSkillState, loadWorkflow, refreshHealth]);
+  }, [loadInitialSkillState, loadInitialWorkflow, refreshHealth]);
 
   useEffect(() => {
     void loadInitial();
@@ -443,15 +462,6 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [artifactDraft, loadWorkflow]);
 
-  async function selectWorkflow(workflowId: string) {
-    if (!workflowId) {
-      return;
-    }
-    const full = await loadWorkflow(workflowId);
-    setSelectedProcessId(full.processes[0]?.id ?? "");
-    setSelectedArtifactId("");
-  }
-
   async function addProcess() {
     if (!workflow) {
       return;
@@ -678,76 +688,6 @@ export function App() {
     });
   }
 
-  async function createWorkflow() {
-    const created = await api.createWorkflow("New Workflow");
-    setWorkflows((items) => [created, ...items]);
-    const full = await loadWorkflow(created.id);
-    setSelectedProcessId(full.processes[0]?.id ?? "");
-    setSelectedArtifactId("");
-  }
-
-  async function exportCurrentWorkflow() {
-    if (!workflow) {
-      return;
-    }
-    try {
-      const { document, filename } = await api.exportWorkflow(workflow.id);
-      downloadJsonDocument(document, filename);
-    } catch (exc) {
-      setError(String(exc));
-    }
-  }
-
-  async function importWorkflowFile(file: File | null) {
-    if (!file) {
-      return;
-    }
-    try {
-      const document = JSON.parse(await file.text());
-      const created = await api.importWorkflow(document);
-      setWorkflows(await api.listWorkflows());
-      const full = await loadWorkflow(created.id);
-      setSelectedProcessId(full.processes[0]?.id ?? "");
-      setSelectedArtifactId(full.processes.length === 0 ? (full.artifacts[0]?.id ?? "") : "");
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      if (workflowImportRef.current) {
-        workflowImportRef.current.value = "";
-      }
-    }
-  }
-
-  async function deleteCurrentWorkflow() {
-    if (!workflow) {
-      return;
-    }
-    const confirmed = window.confirm(`Delete workflow "${workflow.name}"? This cannot be undone.`);
-    if (!confirmed) {
-      return;
-    }
-    try {
-      await api.deleteWorkflow(workflow.id);
-      const list = await api.listWorkflows();
-      setWorkflows(list);
-      setSelectedRun(null);
-      setSelectedProcessId("");
-      setSelectedArtifactId("");
-      setProcessDraft(null);
-      setArtifactDraft(null);
-      if (list.length > 0) {
-        const full = await loadWorkflow(list[0].id);
-        setSelectedProcessId(full.processes[0]?.id ?? "");
-        setSelectedArtifactId(full.processes.length === 0 ? (full.artifacts[0]?.id ?? "") : "");
-      } else {
-        setWorkflow(null);
-        setCost(null);
-      }
-    } catch (exc) {
-      setError(String(exc));
-    }
-  }
-
   const usage = totalUsage(selectedRun);
   const runProcessSummaries = useMemo(
     () =>
@@ -822,7 +762,7 @@ export function App() {
             onImportWorkflowFile={(file) => void importWorkflowFile(file)}
             onDeleteWorkflow={() => void deleteCurrentWorkflow()}
             onSelectWorkflow={(workflowId) => void selectWorkflow(workflowId)}
-            onRefreshWorkflow={() => workflow && void loadWorkflow(workflow.id)}
+            onRefreshWorkflow={() => void refreshWorkflow()}
             onSelectProcess={selectProcess}
             onToggleRunProcess={toggleRunProcess}
             onSelectRun={(processId, runId) => {
