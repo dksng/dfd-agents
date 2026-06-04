@@ -10,7 +10,7 @@ import {
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, artifactDownloadUrl, wsUrl } from "./api";
+import { api, artifactDownloadUrl } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ArtifactInspector } from "./components/ArtifactInspector";
 import { CanvasPanel, type CanvasNodeContextMenu } from "./components/CanvasPanel";
@@ -23,6 +23,7 @@ import { Topbar } from "./components/Topbar";
 import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
+import { useRunStream } from "./hooks/useRunStream";
 import type {
   AppSettings,
   ArtifactNode,
@@ -34,7 +35,6 @@ import type {
   RunDetail,
   RunSummary,
   SkillCandidate,
-  TokenUsage,
   Workflow
 } from "./types";
 
@@ -49,13 +49,6 @@ function totalUsage(run: RunDetail | null): CostSummary {
     }),
     { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0, cost_usd: 0 }
   );
-}
-
-function appendUnique<T extends { id: string }>(items: T[], item: T): T[] {
-  if (items.some((current) => current.id === item.id)) {
-    return items;
-  }
-  return [...items, item];
 }
 
 function skillKey(skill: Pick<SkillCandidate, "skill_source" | "skill_ref">): string {
@@ -120,7 +113,6 @@ export function App() {
   const [qaAnswer, setQaAnswer] = useState("");
   const [reviewExpanded, setReviewExpanded] = useState(true);
   const [suggestOpen, setSuggestOpen] = useState(false);
-  const [wsConnected, setWsConnected] = useState(false);
   const [diffBaseId, setDiffBaseId] = useState("");
   const [diffTargetId, setDiffTargetId] = useState("");
   const [diffText, setDiffText] = useState("");
@@ -307,6 +299,16 @@ export function App() {
     () => new Map((workflow?.artifacts ?? []).map((artifact) => [artifact.id, artifact])),
     [workflow]
   );
+
+  useRunStream({
+    selectedRun,
+    setSelectedRun,
+    setWorkflow,
+    setCost,
+    workflowIdRef,
+    loadWorkflow,
+    setError
+  });
 
   const visibleSkills = useMemo(() => {
     const selectedKeys = new Set(
@@ -538,116 +540,22 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [workflowNameDraft, workflow]);
 
+  const selectedRunId = selectedRun?.id;
+  const selectedRunStatus = selectedRun?.status;
+
   useEffect(() => {
-    if (!selectedRun) {
+    if (!selectedRunId) {
       reviewAutoCollapseKeyRef.current = "";
       setReviewExpanded(true);
       return;
     }
-    const key = `${selectedRun.id}:${selectedRun.status}`;
+    const key = `${selectedRunId}:${selectedRunStatus}`;
     if (reviewAutoCollapseKeyRef.current === key) {
       return;
     }
     reviewAutoCollapseKeyRef.current = key;
-    setReviewExpanded(selectedRun.status !== "approved");
-  }, [selectedRun?.id, selectedRun?.status]);
-
-  useEffect(() => {
-    if (!selectedRun?.id) {
-      return;
-    }
-    const socket = new WebSocket(wsUrl(selectedRun.id));
-    socket.onopen = () => setWsConnected(true);
-    socket.onclose = () => setWsConnected(false);
-    socket.onerror = () => setWsConnected(false);
-    socket.onmessage = (message) => {
-      const event = JSON.parse(message.data) as { type: string; payload: Record<string, unknown> };
-      if (event.type === "log") {
-        setSelectedRun((current) =>
-          current && current.id === selectedRun.id
-            ? {
-                ...current,
-                logs: appendUnique(current.logs, event.payload as unknown as RunDetail["logs"][number])
-              }
-            : current
-        );
-        return;
-      }
-      if (event.type === "usage") {
-        const usageEvent = event.payload as unknown as TokenUsage;
-        setSelectedRun((current) =>
-          current && current.id === selectedRun.id
-            ? {
-                ...current,
-                token_usage: appendUnique(current.token_usage, usageEvent)
-              }
-            : current
-        );
-        setWorkflow((current) =>
-          current
-            ? {
-                ...current,
-                processes: current.processes.map((process) => ({
-                  ...process,
-                  runs: process.runs.map((run) =>
-                    run.id === usageEvent.run_id
-                      ? {
-                          ...run,
-                          input_tokens: (run.input_tokens ?? 0) + usageEvent.input_tokens,
-                          output_tokens: (run.output_tokens ?? 0) + usageEvent.output_tokens,
-                          cache_read: (run.cache_read ?? 0) + usageEvent.cache_read,
-                          cache_write: (run.cache_write ?? 0) + usageEvent.cache_write,
-                          cost_usd: (run.cost_usd ?? 0) + usageEvent.cost_usd
-                        }
-                      : run
-                  )
-                }))
-              }
-            : current
-        );
-        setCost((current) =>
-          current
-            ? {
-                input_tokens: current.input_tokens + usageEvent.input_tokens,
-                output_tokens: current.output_tokens + usageEvent.output_tokens,
-                cache_read: current.cache_read + usageEvent.cache_read,
-                cache_write: current.cache_write + usageEvent.cache_write,
-                cost_usd: current.cost_usd + usageEvent.cost_usd
-              }
-            : current
-        );
-        return;
-      }
-      void api
-        .getRun(selectedRun.id)
-        .then(setSelectedRun)
-        .catch((exc) => setError(String(exc)));
-      const workflowId = workflowIdRef.current;
-      if (workflowId) {
-        void loadWorkflow(workflowId);
-      }
-    };
-    return () => {
-      socket.close();
-      setWsConnected(false);
-    };
-  }, [loadWorkflow, selectedRun?.id]);
-
-  useEffect(() => {
-    if (!selectedRun?.id || wsConnected || !["running", "waiting_qa", "draft"].includes(selectedRun.status)) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void api
-        .getRun(selectedRun.id)
-        .then(setSelectedRun)
-        .catch((exc) => setError(String(exc)));
-      if (workflowIdRef.current) {
-        void loadWorkflow(workflowIdRef.current);
-      }
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [loadWorkflow, selectedRun?.id, selectedRun?.status, wsConnected]);
+    setReviewExpanded(selectedRunStatus !== "approved");
+  }, [selectedRunId, selectedRunStatus]);
 
   const computedNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const producerByArtifact = new Map<string, string>();
@@ -733,7 +641,7 @@ export function App() {
 
   const goalArtifacts = useMemo(() => {
     return processDraft ? artifactsConnectedToProcess(workflow, processDraft.id) : [];
-  }, [processDraft?.id, workflow]);
+  }, [processDraft, workflow]);
 
   async function selectWorkflow(workflowId: string) {
     if (!workflowId) {
