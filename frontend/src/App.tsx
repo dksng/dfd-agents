@@ -1,6 +1,6 @@
 import { useReactFlow } from "@xyflow/react";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api } from "./api";
 import { ActivityPanel } from "./components/ActivityPanel";
@@ -20,6 +20,7 @@ import { useHealth } from "./hooks/useHealth";
 import { useRunReview } from "./hooks/useRunReview";
 import { useRunSummaries } from "./hooks/useRunSummaries";
 import { useRunStream } from "./hooks/useRunStream";
+import { useSelectedWorkflowItems } from "./hooks/useSelectedWorkflowItems";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkflowActions } from "./hooks/useWorkflowActions";
 import { useWorkflowName } from "./hooks/useWorkflowName";
@@ -128,35 +129,8 @@ export function App() {
     workflowIdRef.current = workflow?.id ?? null;
   }, [workflow?.id]);
 
-  const selectedProcess = useMemo(
-    () => workflow?.processes.find((process) => process.id === selectedProcessId) ?? null,
-    [selectedProcessId, workflow]
-  );
-
-  const selectedArtifact = useMemo(
-    () => workflow?.artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null,
-    [selectedArtifactId, workflow]
-  );
-  const selectedArtifactProducer = useMemo(
-    () =>
-      selectedArtifactId
-        ? (workflow?.edges.find((edge) => edge.kind === "produces" && edge.artifact_id === selectedArtifactId) ?? null)
-        : null,
-    [selectedArtifactId, workflow]
-  );
-  const selectedArtifactProducerName = useMemo(
-    () =>
-      selectedArtifactProducer
-        ? (workflow?.processes.find((process) => process.id === selectedArtifactProducer.process_id)?.name ??
-          "upstream process")
-        : "",
-    [selectedArtifactProducer, workflow]
-  );
-
-  const artifactById = useMemo(
-    () => new Map((workflow?.artifacts ?? []).map((artifact) => [artifact.id, artifact])),
-    [workflow]
-  );
+  const { artifactById, selectedArtifact, selectedArtifactProducer, selectedArtifactProducerName, selectedProcess } =
+    useSelectedWorkflowItems(workflow, selectedProcessId, selectedArtifactId);
 
   const {
     answerQA,
