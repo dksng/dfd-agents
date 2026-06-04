@@ -2,10 +2,8 @@ import {
   applyNodeChanges,
   Background,
   Controls,
-  Handle,
   MarkerType,
   Panel as FlowPanel,
-  Position,
   ReactFlow,
   type Connection,
   type Edge,
@@ -14,9 +12,6 @@ import {
   useReactFlow
 } from "@xyflow/react";
 import {
-  AlertTriangle,
-  ArrowDown,
-  Bot,
   ChevronDown,
   ChevronRight,
   Check,
@@ -31,7 +26,6 @@ import {
   Save,
   Search,
   Settings as SettingsIcon,
-  Terminal,
   Trash2,
   Type,
   Upload,
@@ -40,9 +34,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
-import { compactModelName, downloadJsonDocument, formatCost, simpleLineDiff, sourceFileName } from "./lib/format";
+import { ArtifactFlowNode, ProcessFlowNode, type FlowNodeData } from "./components/FlowNodes";
+import { LogViewer } from "./components/LogViewer";
+import { StatusPill } from "./components/StatusPill";
+import { downloadJsonDocument, formatCost, simpleLineDiff, sourceFileName } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
-import { classifyLog, LOG_FILTERS, type ClassifiedLog, type LogCategory } from "./lib/logClassify";
 import { artifactPayload, processPayload } from "./lib/payloads";
 import { PERMISSION_MODES } from "./types";
 import type {
@@ -54,31 +50,11 @@ import type {
   HealthInfo,
   ProcessNode,
   RunDetail,
-  RunLog,
   RunSummary,
   SkillCandidate,
   TokenUsage,
   Workflow
 } from "./types";
-
-type ProcessNodeData = {
-  process: ProcessNode;
-  selected: boolean;
-  inputCount: number;
-  outputCount: number;
-  onSelect: (id: string) => void;
-  onRun: (id: string) => void;
-};
-
-type ArtifactNodeData = {
-  artifact: ArtifactNode;
-  selected: boolean;
-  producerName?: string;
-  consumerCount: number;
-  onSelect: (id: string) => void;
-};
-
-type FlowNodeData = ProcessNodeData | ArtifactNodeData;
 
 type NodeContextMenu = {
   id: string;
@@ -86,90 +62,6 @@ type NodeContextMenu = {
   x: number;
   y: number;
 } | null;
-
-function StatusPill({ status }: { status?: string }) {
-  return <span className={`status ${status || "draft"}`}>{status || "draft"}</span>;
-}
-
-function ArtifactIcon({ type }: { type: ArtifactType }) {
-  if (type === "file") {
-    return <FileText size={16} />;
-  }
-  if (type === "url") {
-    return <Link size={16} />;
-  }
-  return <Type size={16} />;
-}
-
-function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
-  const latest = data.process.runs?.[0];
-  const skills = data.process.skills ?? [];
-  const skillLabel =
-    skills.length === 0
-      ? "No skills"
-      : skills.length === 1
-        ? skills[0].skill_name
-        : `${skills[0].skill_name} +${skills.length - 1}`;
-  return (
-    <div
-      className={`flow-node process-node ${data.selected ? "selected" : ""}`}
-      onClick={() => data.onSelect(data.process.id)}
-    >
-      <Handle id="consumes" type="target" position={Position.Left} />
-      <Handle id="produces" type="source" position={Position.Right} />
-      <div className="node-topline">
-        <strong>{data.process.name}</strong>
-        <button
-          className="icon-button"
-          title="Run"
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onRun(data.process.id);
-          }}
-        >
-          <Play size={15} />
-        </button>
-      </div>
-      <div className="node-meta">
-        <span className="node-model" title={data.process.agent_model}>
-          {compactModelName(data.process.agent_model)}
-        </span>
-        <span className="node-effort">{data.process.agent_effort || "medium"}</span>
-        <StatusPill status={latest?.status} />
-      </div>
-      <div className="node-skills" title={skills.map((skill) => skill.skill_name).join(", ") || "No skills"}>
-        {skillLabel}
-      </div>
-      <div className="node-stats">
-        <span>{data.inputCount} inputs</span>
-        <span>{data.outputCount} outputs</span>
-      </div>
-    </div>
-  );
-}
-
-function ArtifactFlowNode({ data }: { data: ArtifactNodeData }) {
-  return (
-    <div
-      className={`flow-node artifact-node ${data.selected ? "selected" : ""}`}
-      onClick={() => data.onSelect(data.artifact.id)}
-    >
-      <Handle id="produces" type="target" position={Position.Left} />
-      <Handle id="consumes" type="source" position={Position.Right} />
-      <div className="node-topline">
-        <strong>{data.artifact.name}</strong>
-        <ArtifactIcon type={data.artifact.type} />
-      </div>
-      <div className="node-meta">
-        <span>{data.artifact.type}</span>
-        <span>{data.producerName ?? "source"}</span>
-      </div>
-      <div className="node-stats">
-        <span>{data.consumerCount} consumers</span>
-      </div>
-    </div>
-  );
-}
 
 const nodeTypes = { process: ProcessFlowNode, artifact: ArtifactFlowNode };
 
@@ -241,144 +133,6 @@ function artifactsConnectedToProcess(workflow: Workflow | null, processId: strin
     workflow.edges.filter((edge) => edge.process_id === processId).map((edge) => edge.artifact_id)
   );
   return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
-}
-
-function categoryIcon(category: LogCategory) {
-  if (category === "agent") return <Bot size={14} />;
-  if (category === "tool") return <Terminal size={14} />;
-  if (category === "error") return <AlertTriangle size={14} />;
-  return <SettingsIcon size={14} />;
-}
-
-function LogCard({ entry, showRaw }: { entry: ClassifiedLog; showRaw: boolean }) {
-  const [open, setOpen] = useState(entry.isError);
-  const hasBody = Boolean(entry.body && entry.body.trim()) || showRaw;
-  return (
-    <div className={`log-card ${entry.category}`}>
-      <button className="log-card-head" onClick={() => hasBody && setOpen((v) => !v)}>
-        <span className="log-cat">{categoryIcon(entry.category)}</span>
-        <time>{new Date(entry.ts).toLocaleTimeString()}</time>
-        <span className="log-title">{entry.title}</span>
-        {hasBody && (
-          <span className="log-chevron">{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span>
-        )}
-      </button>
-      {open && hasBody && (
-        <div className="log-body">
-          {entry.body && entry.body.trim() && <pre>{entry.body}</pre>}
-          {showRaw && <pre className="log-raw">{JSON.stringify(entry.raw, null, 2)}</pre>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LogViewer({ logs, status }: { logs: RunLog[]; status: string }) {
-  const [filter, setFilter] = useState<"all" | LogCategory>("all");
-  const [query, setQuery] = useState("");
-  const [showRaw, setShowRaw] = useState(false);
-  const [follow, setFollow] = useState(true);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  const classified = useMemo(() => logs.map(classifyLog).filter((e): e is ClassifiedLog => e !== null), [logs]);
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: classified.length, agent: 0, tool: 0, system: 0, error: 0 };
-    for (const e of classified) c[e.category] += 1;
-    return c;
-  }, [classified]);
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return classified.filter((e) => {
-      if (filter !== "all" && e.category !== filter) return false;
-      if (q && !(e.title.toLowerCase().includes(q) || e.body.toLowerCase().includes(q))) return false;
-      return true;
-    });
-  }, [classified, filter, query]);
-
-  const running = status === "running" || status === "waiting_qa" || status === "draft";
-  const lastTool = useMemo(
-    () => [...classified].reverse().find((e) => e.category === "tool" && e.tool !== "result"),
-    [classified]
-  );
-  // 完了後は最後の Agent メッセージ（最終出力の要約）を上部に固定。
-  const finished = status === "in_review" || status === "approved" || status === "rejected";
-  const lastAgent = useMemo(() => [...classified].reverse().find((e) => e.category === "agent"), [classified]);
-
-  // 自動スクロール：follow 中のみ最新へ。ユーザーが上にスクロールしたら停止。
-  useEffect(() => {
-    if (follow && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [visible.length, follow]);
-
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    setFollow(atBottom);
-  };
-
-  const jumpToLatest = () => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    setFollow(true);
-  };
-
-  return (
-    <div className="log-viewer">
-      {finished && lastAgent && (
-        <div className="log-pinned">
-          <span className="log-pinned-label">
-            <Bot size={13} /> Final agent message
-          </span>
-          <pre>{lastAgent.body || lastAgent.title}</pre>
-        </div>
-      )}
-      <div className="log-toolbar">
-        <div className="log-filters">
-          {LOG_FILTERS.map((f) => (
-            <button
-              key={f.key}
-              className={`log-filter ${filter === f.key ? "active" : ""}`}
-              onClick={() => setFilter(f.key)}
-            >
-              {f.label}
-              <span className="log-count">{counts[f.key] ?? 0}</span>
-            </button>
-          ))}
-        </div>
-        <div className="log-search">
-          <Search size={13} />
-          <input value={query} placeholder="Filter logs…" onChange={(e) => setQuery(e.target.value)} />
-        </div>
-        <label className="log-raw-toggle">
-          <input type="checkbox" checked={showRaw} onChange={(e) => setShowRaw(e.target.checked)} />
-          Raw
-        </label>
-      </div>
-
-      <div className="log-cards" ref={scrollRef} onScroll={onScroll}>
-        {visible.length === 0 && <div className="muted-line">No log entries.</div>}
-        {visible.map((entry) => (
-          <LogCard key={entry.id} entry={entry} showRaw={showRaw} />
-        ))}
-      </div>
-
-      <div className="log-footer">
-        {running && (
-          <span className="log-running">
-            <span className="dot" /> {lastTool ? `Running ${lastTool.title}` : "Running…"}
-          </span>
-        )}
-        {!follow && (
-          <button className="log-jump" onClick={jumpToLatest}>
-            <ArrowDown size={13} /> Jump to latest
-          </button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export function App() {
