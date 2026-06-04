@@ -20,10 +20,19 @@ class WorkflowUpdate(BaseModel):
     layout_json: dict[str, Any] | None = None
 
 
+class WorkflowImport(BaseModel):
+    document: dict[str, Any]
+    name: str | None = None
+
+
 class SkillSelection(BaseModel):
     skill_name: str
     skill_source: Literal["local", "git"]
     skill_ref: str
+
+
+class AppSettingsUpdate(BaseModel):
+    skill_repos: list[str] | None = None
 
 
 class ProcessCreate(BaseModel):

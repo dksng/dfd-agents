@@ -12,6 +12,7 @@ from agent_orchestrator.api import create_app
 from agent_orchestrator.config import Settings
 from agent_orchestrator.execution import ClaudeCodeAdapter
 from agent_orchestrator.pricing import Pricing
+from agent_orchestrator.skills import SkillRegistry
 
 AUTH = {"authorization": "Bearer dev-token"}
 
@@ -239,6 +240,144 @@ def test_agents_base_returns_template(tmp_path: Path) -> None:
         assert "Goal.md" in body["content"]
 
 
+def test_runtime_settings_update_skill_repos_persists_and_lists_skills(tmp_path: Path) -> None:
+    repo = tmp_path / "skill-repo"
+    skill_dir = repo / "custom-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# Custom Skill\n\nUse this for custom repository setup tests.\n",
+        encoding="utf-8",
+    )
+
+    with make_client(tmp_path) as client:
+        updated = client.put("/api/settings", json={"skill_repos": [str(repo)]}).json()
+        assert updated["skill_repos"] == [str(repo)]
+        listed = client.get("/api/skills").json()
+        assert listed["errors"] == []
+        assert [item["name"] for item in listed["skills"]] == ["custom-skill"]
+
+    settings = Settings(
+        config_root=tmp_path / "config",
+        data_root=tmp_path / "data",
+        agent_mode="mock",
+        api_base="http://testserver",
+    )
+    with TestClient(create_app(settings)) as client:
+        saved = client.get("/api/settings").json()
+        assert saved["skill_repos"] == [str(repo)]
+
+
+def test_skill_description_uses_frontmatter_description(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "write-report"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: write-report\n"
+        "description: \"Write polished reports from research notes.\"\n"
+        "---\n\n"
+        "# Write Report\n\n"
+        "Fallback body text.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(Settings(config_root=tmp_path / "config", data_root=tmp_path / "data"))
+    assert registry._extract_description(skill_md) == "Write polished reports from research notes."
+
+
+def test_workflow_export_import_creates_copy_and_remaps_goal_tokens(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "portable"}).json()
+        process = create_process(client, workflow["id"], "Designer", "design")
+        source = create_artifact(
+            client,
+            workflow["id"],
+            "Source PR",
+            "url",
+            source_url="https://github.com/example/repo/pull/1",
+            pos_x=20,
+            pos_y=30,
+        )
+        output = attach_output(
+            client,
+            workflow["id"],
+            process,
+            "Design Doc",
+            "file",
+            spec_json={"legacy": "kept"},
+        )
+        assert create_edge(client, workflow["id"], "consumes", process["id"], source["id"]).status_code == 200
+        updated = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={
+                "agent_model": "claude-opus-4-8",
+                "agent_effort": "high",
+                "permission_mode": "default",
+                "goal_md": f"Use {{{{artifact:{source['id']}}}}} to produce {{{{artifact:{output['id']}}}}}.",
+                "skills": [
+                    {
+                        "skill_name": "portable-skill",
+                        "skill_source": "git",
+                        "skill_ref": "owner/repo#skills/portable-skill",
+                    }
+                ],
+            },
+        ).json()
+        assert updated["skills"][0]["skill_name"] == "portable-skill"
+
+        exported = client.get(f"/api/workflows/{workflow['id']}/export")
+        assert exported.status_code == 200
+        assert "Content-Disposition" in exported.headers
+        document = exported.json()
+        assert document["format_version"] == 1
+        assert document["processes"][0]["ref"] == process["id"]
+        assert "runs" not in document["processes"][0]
+
+        imported = client.post(
+            "/api/workflows/import",
+            json={"name": "portable copy", "document": document},
+        ).json()
+        assert imported["id"] != workflow["id"]
+        assert imported["name"] == "portable copy"
+        imported_process = imported["processes"][0]
+        imported_artifacts = {artifact["name"]: artifact for artifact in imported["artifacts"]}
+        assert imported_process["id"] != process["id"]
+        assert imported_artifacts["Source PR"]["id"] != source["id"]
+        assert imported_artifacts["Design Doc"]["id"] != output["id"]
+        assert source["id"] not in imported_process["goal_md"]
+        assert output["id"] not in imported_process["goal_md"]
+        assert f"{{{{artifact:{imported_artifacts['Source PR']['id']}}}}}" in imported_process["goal_md"]
+        assert f"{{{{artifact:{imported_artifacts['Design Doc']['id']}}}}}" in imported_process["goal_md"]
+        assert imported_process["skills"][0]["skill_ref"] == "owner/repo#skills/portable-skill"
+        assert {edge["kind"] for edge in imported["edges"]} == {"produces", "consumes"}
+        assert imported_process["runs"] == []
+
+
+def test_delete_workflow_rejects_active_runs_and_removes_workdir(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "delete-me"}).json()
+        process = create_process(client, workflow["id"], "Worker")
+        workflow_dir = client.app.state.settings.workflow_root / workflow["id"]
+        run_dir = workflow_dir / "runs" / "manual"
+        run_dir.mkdir(parents=True)
+        run = client.app.state.store.create_run(
+            process["id"],
+            status="running",
+            workdir_path=str(run_dir),
+        )
+
+        active_delete = client.delete(f"/api/workflows/{workflow['id']}")
+        assert active_delete.status_code == 409
+        assert workflow_dir.exists()
+        assert client.get(f"/api/workflows/{workflow['id']}").status_code == 200
+
+        client.app.state.store.update_run(run["id"], status="failed")
+        deleted = client.delete(f"/api/workflows/{workflow['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json() == {"ok": True}
+        assert not workflow_dir.exists()
+        assert client.get(f"/api/workflows/{workflow['id']}").status_code == 404
+
+
 def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> None:
     adapter = ClaudeCodeAdapter(["claude"])
     seen: set[str] = set()
@@ -329,9 +468,36 @@ def test_workflow_run_review_and_cost(tmp_path: Path) -> None:
         assert cost["input_tokens"] == 1200
         assert cost["output_tokens"] == 450
         assert cost["cost_usd"] > 0
+        run_detail = client.get(f"/api/runs/{run['id']}").json()
+        assert run_detail["cost_usd"] == cost["cost_usd"]
+        full_workflow = client.get(f"/api/workflows/{workflow['id']}").json()
+        run_summary = full_workflow["processes"][0]["runs"][0]
+        assert run_summary["input_tokens"] == 1200
+        assert run_summary["output_tokens"] == 450
+        assert run_summary["cost_usd"] == cost["cost_usd"]
 
         reviewed = client.post(f"/api/runs/{run['id']}/review", json={"action": "approve"}).json()
         assert reviewed["status"] == "approved"
+
+
+def test_file_output_path_is_derived_from_artifact_name(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "file-path"}).json()
+        process = create_process(client, workflow["id"], "Producer")
+        artifact = attach_output(
+            client,
+            workflow["id"],
+            process,
+            "final report",
+            "file",
+            spec_json={"path": "output/custom.md"},
+        )
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        output_yaml = Path(run["workdir_path"]) / "output" / "output.yaml"
+        data = yaml.safe_load(output_yaml.read_text(encoding="utf-8"))
+        assert data["output"][0]["id"] == artifact["id"]
+        assert data["output"][0]["path"] == "output/final_report.md"
 
 
 def test_reject_marks_original_run_rejected_and_starts_child(tmp_path: Path) -> None:
@@ -350,6 +516,7 @@ def test_reject_marks_original_run_rejected_and_starts_child(tmp_path: Path) -> 
         original = client.get(f"/api/runs/{run['id']}").json()
         assert original["status"] == "rejected"
         assert child["parent_run_id"] == run["id"]
+        assert child["session_id"] is None
         child = wait_for_status(client, child["id"], {"in_review", "failed"})
         assert child["status"] == "in_review"
 
@@ -474,6 +641,7 @@ def test_public_resume_only_allows_failed_runs(tmp_path: Path) -> None:
         client.app.state.store.update_run(run["id"], status="failed")
         child = client.post(f"/api/runs/{run['id']}/resume", json={"feedback_text": "retry"}).json()
         assert child["parent_run_id"] == run["id"]
+        assert child["session_id"] is None
         child = wait_for_status(client, child["id"], {"in_review", "failed"})
         assert child["status"] == "in_review"
 
@@ -497,6 +665,61 @@ def test_source_artifact_is_injected_without_producer(tmp_path: Path) -> None:
         data = yaml.safe_load(input_yaml.read_text(encoding="utf-8"))
         assert data["input"][0]["id"] == source["id"]
         assert data["input"][0]["text"] == "source text from user"
+
+
+def test_uploaded_file_source_artifact_is_injected(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "file-source"}).json()
+        consumer = create_process(client, workflow["id"], "Consumer")
+        source = create_artifact(client, workflow["id"], "brief", "file")
+
+        upload = client.post(
+            f"/api/artifacts/{source['id']}/source-file?filename=brief.txt",
+            content=b"uploaded source file",
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert upload.status_code == 200
+        uploaded = upload.json()
+        assert Path(uploaded["source_file_path"]).name == "brief.txt"
+        assert create_edge(client, workflow["id"], "consumes", consumer["id"], source["id"]).status_code == 200
+
+        run = client.post(f"/api/processes/{consumer['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        input_yaml = Path(run["workdir_path"]) / "input" / "input.yaml"
+        data = yaml.safe_load(input_yaml.read_text(encoding="utf-8"))
+        input_path = Path(run["workdir_path"]) / data["input"][0]["path"]
+        assert input_path.read_text(encoding="utf-8") == "uploaded source file"
+
+
+def test_produced_artifact_rejects_source_upload_and_ignores_source_default(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "produced-source"}).json()
+        producer = create_process(client, workflow["id"], "Producer")
+        consumer = create_process(client, workflow["id"], "Consumer")
+        artifact = create_artifact(
+            client,
+            workflow["id"],
+            "generated",
+            "text",
+            source_text="must not be used",
+        )
+        assert create_edge(client, workflow["id"], "produces", producer["id"], artifact["id"]).status_code == 200
+        assert create_edge(client, workflow["id"], "consumes", consumer["id"], artifact["id"]).status_code == 200
+
+        produced_file = create_artifact(client, workflow["id"], "generated_file", "file")
+        assert create_edge(client, workflow["id"], "produces", producer["id"], produced_file["id"]).status_code == 200
+        upload = client.post(
+            f"/api/artifacts/{produced_file['id']}/source-file?filename=ignored.txt",
+            content=b"ignored",
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert upload.status_code == 409
+
+        run = client.post(f"/api/processes/{consumer['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        input_yaml = Path(run["workdir_path"]) / "input" / "input.yaml"
+        data = yaml.safe_load(input_yaml.read_text(encoding="utf-8"))
+        assert data["input"][0]["text"] == ""
 
 
 def test_approved_upstream_artifact_is_injected_and_can_fan_out(tmp_path: Path) -> None:

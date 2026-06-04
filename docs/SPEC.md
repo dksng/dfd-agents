@@ -363,6 +363,56 @@ running ─(失敗)→ failed
   - **resume**: session_id が生存していれば同一セッションで継続（途中文脈を維持）。
   - **新規Run**: クリーンな workdir で再起動（session 喪失時の既定）。
 
+### 8.12 ワークフローの保存（エクスポート）/ インポート / 削除
+ワークフロー定義（DFD）はSQLiteに常時保存されるが、これとは別に**可搬なファイル**として出し入れ・削除できる。
+
+#### 8.12.1 エクスポート（保存）
+- 範囲は**定義のみ**：workflow（name/layout）、process（全設定: model/effort/permission/goal/agents_md_append/skills/座標等）、artifact（name/type/ソース値/spec/座標）、edge（kind/参照）。
+- **含めない**：run / run_log / token_usage / review / qa / artifact_value / workdir 実体（実行履歴・コスト・成果物実体）。
+- 形式：JSON（`format_version` 付き）。ノード参照は **可搬 ref**（エクスポート時の元IDを `ref`/`process_ref`/`artifact_ref` として保持）で表現し、`goal_md` 内の `{{artifact:<ref>}}` トークンも ref で持つ。
+```json
+{
+  "format_version": 1,
+  "tool": "agent-process-orchestrator",
+  "exported_at": "2026-06-04T00:00:00Z",
+  "workflow": { "name": "...", "layout_json": {} },
+  "processes": [
+    { "ref": "<orig process id>", "name": "...", "type": "...",
+      "agent_kind": "claude", "agent_model": "...", "agent_effort": "...",
+      "permission_mode": "", "allowed_tools": "", "disallowed_tools": "",
+      "goal_md": "... {{artifact:<artifact ref>}} ...",
+      "template_id": "base", "agents_md_append": "...",
+      "execution_mode": "manual", "pos_x": 0, "pos_y": 0,
+      "skills": [ { "skill_name": "...", "skill_source": "git", "skill_ref": "..." } ] }
+  ],
+  "artifacts": [
+    { "ref": "<orig artifact id>", "name": "...", "type": "text|file|url",
+      "pos_x": 0, "pos_y": 0,
+      "source_text": null, "source_url": null, "source_file_path": null, "spec_json": {} }
+  ],
+  "edges": [ { "kind": "produces|consumes", "process_ref": "...", "artifact_ref": "..." } ]
+}
+```
+- **可搬性の注記**：`source_file_path`（file ソース成果物）と `skill_source=local` の `skill_ref` は**環境依存パス**。文字列はそのまま保持するが、別環境では解決できない場合がある（インポート後に要修正）。git の skill_ref は可搬。
+
+#### 8.12.2 インポート
+- **常に新規ワークフローとして**取り込む（既存を上書きしない）。
+- ref→新ID の対応表を作り、artifact→process→edge の順に**新IDで再作成**。`goal_md` の `{{artifact:<ref>}}` は新 artifact ID に**書き換え**。
+- `format_version` を検証（未知の新バージョンは拒否/警告）。名前は任意で上書き可（既定は元名、必要なら「(imported)」付与）。
+- 取り込み後はそのワークフローへ自動切替。
+
+#### 8.12.3 削除
+- ワークフローを **DBからカスケード削除**（process/artifact/edge/run/log/usage/review/qa/artifact_value）。
+- 加えて **workdir 実体** `<data_root>/workflows/<id>/` も削除（ディスクを残さない）。
+- **進行中Runのガード**：当該ワークフローに `running`/`waiting_qa` の Run があれば **409**（先に停止が必要）。
+- UI は**確認ダイアログ**を挟む（不可逆）。
+
+#### 8.12.4 API / UI
+- `GET /api/workflows/{id}/export`（JSONダウンロード、`Content-Disposition` 添付）
+- `POST /api/workflows/import`（body=エクスポート文書, 任意 `name` 上書き → 新ワークフローを返す）
+- `DELETE /api/workflows/{id}`（カスケード＋workdir削除、進行中Runは409）
+- UI：ワークフロー切替の近くに **Export / Import（ファイル選択）/ Delete（確認付）** を配置。
+
 ---
 
 ## 9. API 設計（主要・概略）
@@ -374,6 +424,9 @@ GET    /api/workflows
 POST   /api/workflows
 GET    /api/workflows/{id}
 PUT    /api/workflows/{id}            # ノード/エッジ/レイアウト更新
+DELETE /api/workflows/{id}            # カスケード削除＋workdir削除（進行中Runは409）
+GET    /api/workflows/{id}/export     # 定義のみ JSON をダウンロード
+POST   /api/workflows/import          # エクスポート文書から新規ワークフロー生成
 POST   /api/workflows/{id}/processes
 DELETE /api/processes/{id}
 POST   /api/workflows/{id}/artifacts       # 成果物ノード作成（name/type/座標/ソース値）

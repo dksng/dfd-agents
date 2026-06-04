@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -73,6 +74,10 @@ class Settings(BaseModel):
         return self.config_root / "pricing.yaml"
 
     @property
+    def runtime_settings_path(self) -> Path:
+        return self.config_root / "runtime_settings.json"
+
+    @property
     def template_root(self) -> Path:
         return PROJECT_ROOT / "agent_orchestrator" / "templates"
 
@@ -82,8 +87,25 @@ class Settings(BaseModel):
         self.workflow_root.mkdir(parents=True, exist_ok=True)
         self.skill_cache_root.mkdir(parents=True, exist_ok=True)
 
+    def load_runtime_settings(self) -> None:
+        if not self.runtime_settings_path.exists():
+            return
+        data = json.loads(self.runtime_settings_path.read_text(encoding="utf-8"))
+        skill_repos = data.get("skill_repos")
+        if isinstance(skill_repos, list):
+            self.skill_repos = [str(item).strip() for item in skill_repos if str(item).strip()]
+
+    def save_runtime_settings(self) -> None:
+        self.config_root.mkdir(parents=True, exist_ok=True)
+        payload = {"skill_repos": self.skill_repos}
+        self.runtime_settings_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
 
 def load_settings() -> Settings:
     settings = Settings()
     settings.ensure_dirs()
+    settings.load_runtime_settings()
     return settings

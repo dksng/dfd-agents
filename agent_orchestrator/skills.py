@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Settings
+from .exceptions import AppValidationError
 
 
 @dataclass(frozen=True)
@@ -87,8 +88,22 @@ class SkillRegistry:
         return candidates
 
     def _extract_description(self, skill_md: Path) -> str:
-        for line in skill_md.read_text(encoding="utf-8", errors="replace").splitlines():
+        lines = skill_md.read_text(encoding="utf-8", errors="replace").splitlines()
+        if lines and lines[0].strip() == "---":
+            for line in lines[1:]:
+                stripped = line.strip()
+                if stripped == "---":
+                    break
+                if stripped.startswith("description:"):
+                    value = stripped.split(":", 1)[1].strip()
+                    return value.strip("\"'")[:500]
+        in_frontmatter = bool(lines and lines[0].strip() == "---")
+        for line in lines[1:] if in_frontmatter else lines:
             stripped = line.strip()
+            if in_frontmatter:
+                if stripped == "---":
+                    in_frontmatter = False
+                continue
             if not stripped or stripped.startswith("#"):
                 continue
             return stripped[:240]
@@ -98,7 +113,7 @@ class SkillRegistry:
         if skill_source == "local":
             return Path(skill_ref).expanduser().resolve()
         if "#" not in skill_ref:
-            raise ValueError("Git skill_ref must be '<owner>/<repo>[@ref]#<skill-path>'")
+            raise AppValidationError("Git skill_ref must be '<owner>/<repo>[@ref]#<skill-path>'")
         repo_spec, rel = skill_ref.split("#", 1)
         return (self._prepare_git_repo(repo_spec, refresh=False) / rel).resolve()
 
@@ -126,4 +141,3 @@ class SkillRegistry:
 
     def _safe_cache_name(self, repo_spec: str) -> str:
         return "".join(ch if ch.isalnum() else "_" for ch in repo_spec)
-

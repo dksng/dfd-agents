@@ -40,6 +40,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
+import { compactModelName, downloadJsonDocument, formatCost, simpleLineDiff, sourceFileName } from "./lib/format";
+import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
+import { classifyLog, LOG_FILTERS, type ClassifiedLog, type LogCategory } from "./lib/logClassify";
+import { artifactPayload, processPayload } from "./lib/payloads";
 import { PERMISSION_MODES } from "./types";
 import type {
   AppSettings,
@@ -95,14 +99,6 @@ function ArtifactIcon({ type }: { type: ArtifactType }) {
     return <Link size={16} />;
   }
   return <Type size={16} />;
-}
-
-function compactModelName(model: string): string {
-  return model
-    .replace(/^claude-/, "")
-    .replace("-sonnet-", "-s-")
-    .replace("-opus-", "-o-")
-    .replace("-haiku-", "-h-");
 }
 
 function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
@@ -223,39 +219,6 @@ function parseRepoDraft(value: string): string[] {
     .filter(Boolean);
 }
 
-function downloadJsonDocument(document: unknown, filename: string) {
-  const blob = new Blob([JSON.stringify(document, null, 2)], { type: "application/json" });
-  const href = URL.createObjectURL(blob);
-  const link = window.document.createElement("a");
-  link.href = href;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(href);
-}
-
-function simpleLineDiff(before: string, after: string): string {
-  if (before === after) {
-    return "No changes.";
-  }
-  const beforeLines = before.split(/\r?\n/);
-  const afterLines = after.split(/\r?\n/);
-  return [
-    ...beforeLines.map((line) => `- ${line}`),
-    ...afterLines.map((line) => `+ ${line}`)
-  ].join("\n");
-}
-
-function sourceFileName(path: string | null | undefined): string {
-  if (!path) {
-    return "";
-  }
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-function formatCost(value: number | null | undefined): string {
-  return `$${(value ?? 0).toFixed(5)}`;
-}
-
 async function artifactContent(run: Pick<RunDetail, "id">, artifact: ArtifactValue): Promise<string> {
   if (artifact.artifact_type === "text") {
     return artifact.text_value ?? "";
@@ -279,39 +242,6 @@ const MODEL_OPTIONS = [
 
 const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
 
-// Goal.md は表示名 `{artifact name}` で編集・保存する。
-// 旧形式の `{{artifact:<id>}}` トークンは読み込み時に表示名へ正規化する。
-function artifactDisplayLabel(artifact: ArtifactNode, artifacts: ArtifactNode[]): string {
-  const duplicateName = artifacts.some((item) => item.id !== artifact.id && item.name === artifact.name);
-  return duplicateName ? `${artifact.name} #${artifact.id.slice(-6)}` : artifact.name;
-}
-
-function normalizeGoalForDisplay(goal: string, artifacts: ArtifactNode[]): string {
-  return goal.replace(/\{\{artifact:([^}]+)\}\}/g, (_match, id: string) => {
-    const artifact = artifacts.find((item) => item.id === id);
-    return artifact ? `{${artifactDisplayLabel(artifact, artifacts)}}` : `{${id}}`;
-  });
-}
-
-function normalizeGoalForStorage(goal: string, artifacts: ArtifactNode[]): string {
-  const nameCounts = new Map<string, number>();
-  for (const artifact of artifacts) {
-    nameCounts.set(artifact.name, (nameCounts.get(artifact.name) ?? 0) + 1);
-  }
-  const artifactByLabel = new Map<string, ArtifactNode>();
-  const artifactByUniqueName = new Map<string, ArtifactNode>();
-  for (const artifact of artifacts) {
-    artifactByLabel.set(artifactDisplayLabel(artifact, artifacts), artifact);
-    if ((nameCounts.get(artifact.name) ?? 0) === 1) {
-      artifactByUniqueName.set(artifact.name, artifact);
-    }
-  }
-  return goal.replace(/\{([^{}]+)\}/g, (match, label: string) => {
-    const artifact = artifactByLabel.get(label) ?? artifactByUniqueName.get(label);
-    return artifact ? `{{artifact:${artifact.id}}}` : match;
-  });
-}
-
 function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
   if (!workflow) {
     return [];
@@ -322,153 +252,6 @@ function artifactsConnectedToProcess(workflow: Workflow | null, processId: strin
       .map((edge) => edge.artifact_id)
   );
   return workflow.artifacts.filter((artifact) => connectedIds.has(artifact.id));
-}
-
-// autosave / 明示保存で送るペイロード（位置はドラッグ側で別途保存するため含めない）。
-function processPayload(draft: ProcessNode, artifacts: ArtifactNode[]): Record<string, unknown> {
-  return {
-    name: draft.name,
-    agent_kind: draft.agent_kind,
-    agent_model: draft.agent_model,
-    agent_effort: draft.agent_effort,
-    permission_mode: draft.permission_mode,
-    allowed_tools: draft.allowed_tools,
-    disallowed_tools: draft.disallowed_tools,
-    goal_md: normalizeGoalForStorage(draft.goal_md, artifacts),
-    template_id: draft.template_id,
-    agents_md_append: draft.agents_md_append,
-    execution_mode: draft.execution_mode,
-    skills: draft.skills
-  };
-}
-
-function artifactPayload(draft: ArtifactNode): Record<string, unknown> {
-  return {
-    name: draft.name,
-    type: draft.type,
-    source_text: draft.source_text ?? null,
-    source_url: draft.source_url ?? null,
-    source_file_path: draft.source_file_path ?? null,
-    spec_json: draft.spec_json ?? {}
-  };
-}
-
-// ---- Agent ログの分類・表示 ----------------------------------------------
-type LogCategory = "agent" | "tool" | "system" | "error";
-
-interface ClassifiedLog {
-  id: string;
-  ts: string;
-  category: LogCategory;
-  title: string; // 1行サマリ
-  body: string; // 展開時の詳細
-  tool?: string; // ツール名（Bash/Write/Read…）
-  isError: boolean;
-  raw: unknown; // raw_json（Raw表示用）
-}
-
-const LOG_FILTERS: { key: "all" | LogCategory; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "agent", label: "Agent" },
-  { key: "tool", label: "Tools" },
-  { key: "system", label: "System" },
-  { key: "error", label: "Errors" }
-];
-
-function firstLine(text: string): string {
-  const line = (text || "").trim().split(/\r?\n/)[0] ?? "";
-  return line.length > 140 ? `${line.slice(0, 140)}…` : line;
-}
-
-function summarizeToolInput(name: string, input: Record<string, unknown> | undefined): string {
-  if (!input) return "";
-  const pick = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
-  if (name === "Bash") return pick("command") || pick("cmd") || pick("description");
-  if (name === "Read" || name === "Write" || name === "Edit" || name === "NotebookEdit") {
-    return pick("file_path") || pick("path");
-  }
-  if (name === "Grep" || name === "Glob") return pick("pattern") || pick("query");
-  if (name === "WebFetch") return pick("url");
-  if (name === "Task") return pick("description");
-  const json = JSON.stringify(input);
-  return json.length > 100 ? `${json.slice(0, 100)}…` : json;
-}
-
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map((b) => (b && typeof b === "object" ? (b as { text?: string }).text ?? "" : String(b))).join("");
-  }
-  return content == null ? "" : JSON.stringify(content);
-}
-
-// 表示価値のないイベント（テキストもツールも無い user/assistant、中継 system 等）は null を返して捨てる。
-function classifyLog(log: RunLog): ClassifiedLog | null {
-  const base = { id: log.id, ts: log.ts, raw: log.raw_json };
-  const raw = (log.raw_json ?? {}) as Record<string, unknown>;
-  const eventType = typeof raw.type === "string" ? raw.type : "";
-
-  if (log.level === "error") {
-    return { ...base, category: "error", title: log.message, body: log.message, isError: true };
-  }
-
-  const message = (raw.message ?? {}) as Record<string, unknown>;
-  const content = Array.isArray(message.content) ? (message.content as Record<string, unknown>[]) : [];
-
-  if (eventType === "assistant") {
-    const toolUse = content.find((b) => b?.type === "tool_use");
-    if (toolUse) {
-      const name = String(toolUse.name ?? "tool");
-      const inputSummary = summarizeToolInput(name, toolUse.input as Record<string, unknown>);
-      return {
-        ...base,
-        category: "tool",
-        tool: name,
-        title: inputSummary ? `${name}  ${inputSummary}` : name,
-        body: JSON.stringify(toolUse.input ?? {}, null, 2),
-        isError: false
-      };
-    }
-    const text = content
-      .filter((b) => b?.type === "text")
-      .map((b) => String(b.text ?? ""))
-      .join("\n")
-      .trim();
-    if (text) {
-      return { ...base, category: "agent", title: firstLine(text), body: text, isError: false };
-    }
-    return null; // テキストもツールも無い assistant イベント → 捨てる
-  }
-
-  if (eventType === "user") {
-    const toolResult = content.find((b) => b?.type === "tool_result");
-    if (toolResult) {
-      const isError = Boolean(toolResult.is_error);
-      const text = toolResultText(toolResult.content);
-      return {
-        ...base,
-        category: isError ? "error" : "tool",
-        tool: "result",
-        title: `${isError ? "Tool error: " : "→ "}${firstLine(text) || "(empty)"}`,
-        body: text,
-        isError
-      };
-    }
-    return null; // tool_result を含まない user イベント → 捨てる
-  }
-
-  if (eventType === "result") {
-    const text = String(raw.result ?? raw.subtype ?? log.message);
-    return { ...base, category: "system", title: `result: ${firstLine(text)}`, body: text, isError: false };
-  }
-
-  // ストリームの中継 system/rate_limit_event など（type付きで本文なし）は捨てる。
-  if (eventType) {
-    return null;
-  }
-
-  // オーケストレーターのライフサイクルログ（type無し: start/submit/review/qa…）は表示。
-  return { ...base, category: "system", title: log.message, body: log.message, isError: false };
 }
 
 function categoryIcon(category: LogCategory) {

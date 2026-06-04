@@ -15,6 +15,7 @@ import yaml
 from .config import Settings
 from .db import AGENT_EFFORT_VALUES, PERMISSION_MODE_VALUES, Store
 from .events import EventHub
+from .exceptions import AppValidationError, ConflictError
 from .pricing import Pricing
 from .workspace import WorkspaceBuilder, safe_name
 
@@ -61,7 +62,7 @@ class ExecutionEngine:
     async def resume_run(self, run_id: str, feedback_text: str) -> dict[str, Any]:
         parent = self.store.get_run(run_id)
         if parent["status"] not in RUN_STATUSES_ALLOWING_PUBLIC_RESUME:
-            raise ValueError(f"Run cannot be resumed from status: {parent['status']}")
+            raise ConflictError(f"Run cannot be resumed from status: {parent['status']}")
         return await self._resume_run(parent, feedback_text)
 
     async def _resume_run(self, parent: dict[str, Any], feedback_text: str) -> dict[str, Any]:
@@ -72,7 +73,6 @@ class ExecutionEngine:
             status="draft",
             workdir_path=str(workdir),
             parent_run_id=parent["id"],
-            session_id=parent.get("session_id"),
         )
         actual_workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / run["id"]
         self.store.update_run(run["id"], workdir_path=str(actual_workdir))
@@ -84,7 +84,7 @@ class ExecutionEngine:
     async def submit_run(self, run_id: str) -> dict[str, Any]:
         run = self.store.get_run(run_id)
         if run["status"] not in RUN_STATUSES_ALLOWING_SUBMIT:
-            raise ValueError(f"Run cannot be submitted from status: {run['status']}")
+            raise ConflictError(f"Run cannot be submitted from status: {run['status']}")
         values = self._read_output_values(run)
         artifacts = self.store.replace_artifact_values(run_id, values)
         output_snapshot = {"artifacts": artifacts}
@@ -97,7 +97,7 @@ class ExecutionEngine:
     async def review_run(self, run_id: str, action: str, feedback_text: str) -> dict[str, Any]:
         run = self.store.get_run(run_id)
         if run["status"] not in RUN_STATUSES_ALLOWING_REVIEW:
-            raise ValueError(f"Run cannot be reviewed from status: {run['status']}")
+            raise ConflictError(f"Run cannot be reviewed from status: {run['status']}")
         if action == "approve":
             self.store.resolve_review(run_id, "approved", feedback_text)
             updated = self.store.update_run(run_id, status="approved")
@@ -138,7 +138,7 @@ class ExecutionEngine:
         current_qa = self.store.get_qa(qa_id)
         run = self.store.get_run(current_qa["run_id"])
         if run["status"] != "waiting_qa":
-            raise ValueError(f"QA cannot be answered while run is {run['status']}")
+            raise ConflictError(f"QA cannot be answered while run is {run['status']}")
         qa = self.store.answer_qa(qa_id, answer_text)
         self.store.update_run(qa["run_id"], status="running", ended_at=None)
         await self._publish(qa["run_id"], "qa_answered", qa)
@@ -426,7 +426,7 @@ class ClaudeCodeAdapter(AgentAdapter):
         effort = (process.get("agent_effort") or "").strip()
         if effort and "--effort" not in command:
             if effort not in AGENT_EFFORT_VALUES:
-                raise ValueError(f"Invalid agent_effort: {effort}")
+                raise AppValidationError(f"Invalid agent_effort: {effort}")
             command.extend(["--effort", effort])
         self._apply_permissions(command, process)
         return command
@@ -446,7 +446,7 @@ class ClaudeCodeAdapter(AgentAdapter):
         mode = self._permission_setting(process, "permission_mode", default_mode)
         if mode and "--permission-mode" not in command:
             if mode not in PERMISSION_MODE_VALUES or mode == "":
-                raise ValueError(f"Invalid permission_mode: {mode}")
+                raise AppValidationError(f"Invalid permission_mode: {mode}")
             command.extend(["--permission-mode", mode])
 
         # allowed/disallowed はカンマ区切り。各パターン（Bash(git *) 等は空白を含む）を

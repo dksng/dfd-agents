@@ -70,9 +70,9 @@ class WorkspaceBuilder:
         values: list[dict[str, Any]] = []
         for edge in self.store.get_edges_for_process(process["id"], "consumes"):
             artifact = self.store.get_artifact(edge["artifact_id"])
-            value = self._artifact_source_default(artifact, workdir)
             producer = next(iter(self.store.get_edges_for_artifact(artifact["id"], "produces")), None)
             if producer:
+                value = self._empty_artifact_input(artifact, workdir)
                 upstream_run = self.store.latest_approved_run(producer["process_id"])
                 if upstream_run:
                     upstream_value = next(
@@ -81,8 +81,23 @@ class WorkspaceBuilder:
                     )
                     if upstream_value:
                         value = self._input_from_upstream(artifact, upstream_run, upstream_value, workdir)
+            else:
+                value = self._artifact_source_default(artifact, workdir)
             values.append(value)
         return values
+
+    def _empty_artifact_input(self, artifact: dict[str, Any], workdir: Path) -> dict[str, Any]:
+        item = {"id": artifact["id"], "name": artifact["name"], "type": artifact["type"]}
+        if artifact["type"] == "file":
+            filename = safe_name(artifact["name"])
+            target = workdir / "input" / filename
+            target.write_text("", encoding="utf-8")
+            item["path"] = f"input/{filename}"
+        elif artifact["type"] == "url":
+            item["url"] = ""
+        else:
+            item["text"] = ""
+        return item
 
     def _input_from_upstream(
         self,
@@ -137,7 +152,7 @@ class WorkspaceBuilder:
             spec = artifact.get("spec_json") or {}
             item = {"id": artifact["id"], "name": artifact["name"], "type": artifact["type"]}
             if artifact["type"] == "file":
-                item["path"] = spec.get("path", f"output/{safe_name(artifact['name'])}.md")
+                item["path"] = f"output/{safe_name(artifact['name'])}.md"
             elif artifact["type"] == "url":
                 item["url"] = spec.get("url", "")
             else:
