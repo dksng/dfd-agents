@@ -36,6 +36,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
 import { ArtifactFlowNode, ProcessFlowNode, type FlowNodeData } from "./components/FlowNodes";
 import { LogViewer } from "./components/LogViewer";
+import { SettingsModal } from "./components/SettingsModal";
 import { StatusPill } from "./components/StatusPill";
 import { downloadJsonDocument, formatCost, simpleLineDiff, sourceFileName } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
@@ -1255,65 +1256,18 @@ export function App() {
       </header>
 
       {settingsOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
-          <section
-            className="settings-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="panel-title">
-              <strong id="settings-title">Settings</strong>
-              <button className="icon-button" title="Close" onClick={() => setSettingsOpen(false)}>
-                <X size={15} />
-              </button>
-            </div>
-
-            <div className="field-block">
-              <span>Skill Repositories</span>
-              <textarea
-                value={settingsDraft}
-                onChange={(event) => setSettingsDraft(event.target.value)}
-                rows={7}
-                placeholder={"owner/repo\nowner/repo@main\n/home/user/local-skills"}
-              />
-              <small className="muted-line">
-                One repository per line. Local paths are allowed. GitHub repositories use gh and are cached under
-                config.
-              </small>
-            </div>
-
-            <div className="settings-facts">
-              <span>Current skills</span>
-              <strong>{skills.length}</strong>
-              <span>Config root</span>
-              <code>{appSettings?.config_root ?? ""}</code>
-              <span>Skill cache</span>
-              <code>{appSettings?.skill_cache_root ?? ""}</code>
-            </div>
-
-            {skillErrors.length > 0 && (
-              <div className="settings-errors">
-                {skillErrors.map((item) => (
-                  <div key={item}>{item}</div>
-                ))}
-              </div>
-            )}
-            {settingsMessage && <div className="muted-line">{settingsMessage}</div>}
-
-            <div className="button-row">
-              <button className="icon-text" disabled={settingsSaving} onClick={() => void saveSettings()}>
-                <Save size={15} />
-                Save
-              </button>
-              <button className="icon-text" disabled={settingsSaving} onClick={() => void refreshSkills()}>
-                <RefreshCw size={15} />
-                Refresh Skills
-              </button>
-            </div>
-          </section>
-        </div>
+        <SettingsModal
+          settingsDraft={settingsDraft}
+          settingsSaving={settingsSaving}
+          settingsMessage={settingsMessage}
+          skillErrors={skillErrors}
+          skillCount={skills.length}
+          appSettings={appSettings}
+          onClose={() => setSettingsOpen(false)}
+          onDraftChange={setSettingsDraft}
+          onSave={() => void saveSettings()}
+          onRefreshSkills={() => void refreshSkills()}
+        />
       )}
 
       {health?.active_adapter === "mock" && (
