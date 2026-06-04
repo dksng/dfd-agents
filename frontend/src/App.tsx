@@ -18,6 +18,7 @@ import { useHealth } from "./hooks/useHealth";
 import { useRunReview } from "./hooks/useRunReview";
 import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
+import { useWorkflowName } from "./hooks/useWorkflowName";
 import { downloadJsonDocument } from "./lib/format";
 import { normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
@@ -68,7 +69,6 @@ export function App() {
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string>("");
   const [agentsBase, setAgentsBase] = useState("");
-  const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
@@ -78,11 +78,9 @@ export function App() {
   const savedArtifactRef = useRef<string>("");
   const processSaveSeqRef = useRef(0);
   const artifactSaveSeqRef = useRef(0);
-  const workflowSaveSeqRef = useRef(0);
   const explicitRunSelectionRef = useRef("");
   const processSaveAbortRef = useRef<AbortController | null>(null);
   const artifactSaveAbortRef = useRef<AbortController | null>(null);
-  const workflowSaveAbortRef = useRef<AbortController | null>(null);
 
   const loadWorkflow = useCallback(async (id: string) => {
     const data = await api.getWorkflow(id);
@@ -156,6 +154,12 @@ export function App() {
   }, []);
 
   const { health, refreshHealth } = useHealth();
+  const { setWorkflowNameDraft, workflowNameDraft } = useWorkflowName({
+    setError,
+    setWorkflow,
+    setWorkflows,
+    workflow
+  });
 
   const {
     appSettings,
@@ -207,8 +211,7 @@ export function App() {
 
   useEffect(() => {
     workflowIdRef.current = workflow?.id ?? null;
-    setWorkflowNameDraft(workflow?.name ?? "");
-  }, [workflow?.id, workflow?.name]);
+  }, [workflow?.id]);
 
   const selectedProcess = useMemo(
     () => workflow?.processes.find((process) => process.id === selectedProcessId) ?? null,
@@ -439,35 +442,6 @@ export function App() {
     }, 700);
     return () => window.clearTimeout(timer);
   }, [artifactDraft, loadWorkflow]);
-
-  // ワークフロー名のデバウンス自動保存。
-  useEffect(() => {
-    if (!workflow || workflowNameDraft === workflow.name) {
-      return;
-    }
-    const id = workflow.id;
-    workflowSaveAbortRef.current?.abort();
-    const controller = new AbortController();
-    const saveSeq = ++workflowSaveSeqRef.current;
-    const timer = window.setTimeout(() => {
-      void api
-        .updateWorkflow(id, { name: workflowNameDraft }, { signal: controller.signal })
-        .then(() => {
-          if (controller.signal.aborted || saveSeq !== workflowSaveSeqRef.current) {
-            return;
-          }
-          setWorkflows((items) => items.map((item) => (item.id === id ? { ...item, name: workflowNameDraft } : item)));
-          setWorkflow((current) => (current && current.id === id ? { ...current, name: workflowNameDraft } : current));
-        })
-        .catch((exc) => {
-          if (controller.signal.aborted) {
-            return;
-          }
-          setError(String(exc));
-        });
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [workflowNameDraft, workflow]);
 
   async function selectWorkflow(workflowId: string) {
     if (!workflowId) {
@@ -768,7 +742,6 @@ export function App() {
       } else {
         setWorkflow(null);
         setCost(null);
-        setWorkflowNameDraft("");
       }
     } catch (exc) {
       setError(String(exc));
