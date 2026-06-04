@@ -1,47 +1,28 @@
 import {
   applyNodeChanges,
-  Background,
-  Controls,
   MarkerType,
-  Panel as FlowPanel,
-  ReactFlow,
   type Connection,
   type Edge,
   type Node,
   type NodeChange,
   useReactFlow
 } from "@xyflow/react";
-import {
-  ChevronDown,
-  ChevronRight,
-  Check,
-  Copy,
-  Download,
-  FileText,
-  Link,
-  MessageSquare,
-  Play,
-  Plus,
-  RefreshCw,
-  Save,
-  Search,
-  Settings as SettingsIcon,
-  Trash2,
-  Type,
-  Upload,
-  X
-} from "lucide-react";
+import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, artifactDownloadUrl, wsUrl } from "./api";
-import { ArtifactFlowNode, ProcessFlowNode, type FlowNodeData } from "./components/FlowNodes";
-import { LogViewer } from "./components/LogViewer";
+import { ActivityPanel } from "./components/ActivityPanel";
+import { ArtifactInspector } from "./components/ArtifactInspector";
+import { CanvasPanel, type CanvasNodeContextMenu } from "./components/CanvasPanel";
+import type { FlowNodeData } from "./components/FlowNodes";
+import { LeftPanel } from "./components/LeftPanel";
+import { ProcessInspector } from "./components/ProcessInspector";
+import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
-import { StatusPill } from "./components/StatusPill";
-import { downloadJsonDocument, formatCost, simpleLineDiff, sourceFileName } from "./lib/format";
+import { Topbar } from "./components/Topbar";
+import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
 import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
-import { PERMISSION_MODES } from "./types";
 import type {
   AppSettings,
   ArtifactNode,
@@ -56,15 +37,6 @@ import type {
   TokenUsage,
   Workflow
 } from "./types";
-
-type NodeContextMenu = {
-  id: string;
-  kind: "process" | "artifact";
-  x: number;
-  y: number;
-} | null;
-
-const nodeTypes = { process: ProcessFlowNode, artifact: ArtifactFlowNode };
 
 function totalUsage(run: RunDetail | null): CostSummary {
   return (run?.token_usage ?? []).reduce(
@@ -122,10 +94,6 @@ async function artifactContent(run: Pick<RunDetail, "id">, artifact: ArtifactVal
   return response.text();
 }
 
-const MODEL_OPTIONS = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"];
-
-const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
-
 function artifactsConnectedToProcess(workflow: Workflow | null, processId: string): ArtifactNode[] {
   if (!workflow) {
     return [];
@@ -173,7 +141,7 @@ export function App() {
   const [artifactPreviewText, setArtifactPreviewText] = useState("");
   const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
-  const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenu>(null);
+  const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
   const [skillSearch, setSkillSearch] = useState("");
   const [expandedSkillKeys, setExpandedSkillKeys] = useState<Set<string>>(() => new Set());
   const goalRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1233,27 +1201,12 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">DFD</span>
-          <strong>Agent Process Orchestrator</strong>
-        </div>
-        <input
-          className="workflow-name"
-          value={workflowNameDraft}
-          onChange={(event) => setWorkflowNameDraft(event.target.value)}
-          placeholder="Workflow name"
-          title="Rename workflow"
-        />
-        <div className="cost-strip">
-          <span>{cost?.input_tokens ?? 0} in</span>
-          <span>{cost?.output_tokens ?? 0} out</span>
-          <strong>${(cost?.cost_usd ?? 0).toFixed(5)}</strong>
-        </div>
-        <button className="icon-button" title="Settings" onClick={() => void openSettingsModal()}>
-          <SettingsIcon size={16} />
-        </button>
-      </header>
+      <Topbar
+        workflowNameDraft={workflowNameDraft}
+        cost={cost}
+        onWorkflowNameChange={setWorkflowNameDraft}
+        onOpenSettings={() => void openSettingsModal()}
+      />
 
       {settingsOpen && (
         <SettingsModal
@@ -1290,130 +1243,32 @@ export function App() {
 
       <PanelGroup direction="horizontal" className="workspace-pg" autoSaveId="orch-cols">
         <Panel defaultSize={20} minSize={12} className="pg-panel">
-          <aside className="left-panel">
-            <div className="panel-title">
-              <strong>Workflows</strong>
-              <div className="button-cluster">
-                <button className="icon-button" onClick={() => void createWorkflow()} title="Add workflow">
-                  <Plus size={16} />
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={() => void exportCurrentWorkflow()}
-                  title="Export workflow"
-                  disabled={!workflow}
-                >
-                  <Download size={16} />
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={() => workflowImportRef.current?.click()}
-                  title="Import workflow"
-                >
-                  <Upload size={16} />
-                </button>
-                <button
-                  className="icon-button danger"
-                  onClick={() => void deleteCurrentWorkflow()}
-                  title="Delete workflow"
-                  disabled={!workflow}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-              <input
-                ref={workflowImportRef}
-                className="hidden-file-input"
-                type="file"
-                accept="application/json,.json"
-                onChange={(event) => void importWorkflowFile(event.target.files?.[0] ?? null)}
-              />
-            </div>
-            <div className="run-list">
-              {workflows.map((item) => (
-                <button
-                  key={item.id}
-                  className={`run-row ${item.id === workflow?.id ? "active" : ""}`}
-                  onClick={() => void selectWorkflow(item.id)}
-                >
-                  <span className="run-main">
-                    <span>{item.name}</span>
-                    <small>{item.id.slice(0, 12)}</small>
-                  </span>
-                </button>
-              ))}
-              {workflows.length === 0 && <div className="muted-line">No workflows yet</div>}
-            </div>
-
-            <div className="panel-title">
-              <strong>Runs</strong>
-              <span className="run-total">{formatCost(workflowRunCost)}</span>
-              <button
-                className="icon-button"
-                title="Refresh"
-                onClick={() => workflow && void loadWorkflow(workflow.id)}
-              >
-                <RefreshCw size={15} />
-              </button>
-            </div>
-            <div className="run-list">
-              {runProcessSummaries.map(({ process, runs, latestRun, totalCost }) => {
-                const expanded = expandedRunProcessIds.has(process.id);
-                return (
-                  <div className="run-group" key={process.id}>
-                    <button
-                      className={`run-row run-group-row ${process.id === selectedProcessId ? "active" : ""}`}
-                      onClick={() => {
-                        selectProcess(process.id);
-                        toggleRunProcess(process.id);
-                      }}
-                    >
-                      <span className="run-main">
-                        <span>
-                          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                          {process.name}
-                        </span>
-                        <small>{runs.length} runs</small>
-                      </span>
-                      <span className="run-side">
-                        <span className="run-cost">{formatCost(totalCost)}</span>
-                        <StatusPill status={latestRun?.status} />
-                      </span>
-                    </button>
-                    {expanded && (
-                      <div className="run-children">
-                        {runs.map((run) => (
-                          <button
-                            key={run.id}
-                            className={`run-row run-child-row ${run.id === selectedRun?.id ? "active" : ""}`}
-                            onClick={() => {
-                              explicitRunSelectionRef.current = run.id;
-                              selectProcess(process.id);
-                              void api
-                                .getRun(run.id)
-                                .then(setSelectedRun)
-                                .catch((exc) => setError(String(exc)));
-                            }}
-                          >
-                            <span className="run-main">
-                              <span>{run.id.slice(0, 12)}</span>
-                              <small>{new Date(run.started_at).toLocaleString()}</small>
-                            </span>
-                            <span className="run-side">
-                              <span className="run-cost">{formatCost(run.cost_usd)}</span>
-                              <StatusPill status={run.status} />
-                            </span>
-                          </button>
-                        ))}
-                        {runs.length === 0 && <div className="muted-line run-empty">No runs yet</div>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {runProcessSummaries.length === 0 && <div className="muted-line">No processes yet</div>}
-            </div>
-          </aside>
+          <LeftPanel
+            workflows={workflows}
+            workflow={workflow}
+            workflowRunCost={workflowRunCost}
+            workflowImportRef={workflowImportRef}
+            runProcessSummaries={runProcessSummaries}
+            expandedRunProcessIds={expandedRunProcessIds}
+            selectedProcessId={selectedProcessId}
+            selectedRunId={selectedRun?.id ?? null}
+            onCreateWorkflow={() => void createWorkflow()}
+            onExportWorkflow={() => void exportCurrentWorkflow()}
+            onImportWorkflowFile={(file) => void importWorkflowFile(file)}
+            onDeleteWorkflow={() => void deleteCurrentWorkflow()}
+            onSelectWorkflow={(workflowId) => void selectWorkflow(workflowId)}
+            onRefreshWorkflow={() => workflow && void loadWorkflow(workflow.id)}
+            onSelectProcess={selectProcess}
+            onToggleRunProcess={toggleRunProcess}
+            onSelectRun={(processId, runId) => {
+              explicitRunSelectionRef.current = runId;
+              selectProcess(processId);
+              void api
+                .getRun(runId)
+                .then(setSelectedRun)
+                .catch((exc) => setError(String(exc)));
+            }}
+          />
         </Panel>
 
         <PanelResizeHandle className="resize-handle resize-h" />
@@ -1421,104 +1276,42 @@ export function App() {
         <Panel defaultSize={54} minSize={28} className="pg-panel">
           <PanelGroup direction="vertical" autoSaveId="orch-center">
             <Panel defaultSize={62} minSize={20} className="pg-panel">
-              <section className="canvas-panel" ref={canvasRef}>
-                <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
-                  nodeTypes={nodeTypes}
-                  onNodesChange={onNodesChange}
-                  onConnect={onConnect}
-                  onPaneClick={() => setNodeContextMenu(null)}
-                  onNodeContextMenu={(event, node) => {
-                    event.preventDefault();
-                    const kind = node.type === "artifact" ? "artifact" : "process";
-                    if (kind === "process") {
-                      setSelectedProcessId(node.id);
-                      setSelectedArtifactId("");
-                    } else {
-                      setSelectedArtifactId(node.id);
-                      setSelectedProcessId("");
-                    }
-                    setNodeContextMenu({
-                      id: node.id,
-                      kind,
-                      x: Math.min(event.clientX, window.innerWidth - 180),
-                      y: Math.min(event.clientY, window.innerHeight - 96)
-                    });
-                  }}
-                  onEdgeDoubleClick={(_, edge) => {
-                    if (workflow) {
-                      void api.deleteEdge(edge.id).then(() => loadWorkflow(workflow.id));
-                    }
-                  }}
-                  onNodeDragStop={(_, node) => void updateNodePosition(node.id, node.position.x, node.position.y)}
-                  fitView
-                >
-                  <FlowPanel position="top-left" className="canvas-toolbar">
-                    <button className="icon-text" onClick={() => void addProcess()} disabled={!workflow}>
-                      <Plus size={15} />
-                      Process
-                    </button>
-                    <button className="icon-text" onClick={() => void addArtifact("text")} disabled={!workflow}>
-                      <Type size={15} />
-                      Text
-                    </button>
-                    <button className="icon-text" onClick={() => void addArtifact("file")} disabled={!workflow}>
-                      <FileText size={15} />
-                      File
-                    </button>
-                    <button className="icon-text" onClick={() => void addArtifact("url")} disabled={!workflow}>
-                      <Link size={15} />
-                      URL
-                    </button>
-                  </FlowPanel>
-                  <Background />
-                  <Controls />
-                </ReactFlow>
-                {nodeContextMenu && (
-                  <div
-                    className="node-context-menu"
-                    style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
-                    onContextMenu={(event) => event.preventDefault()}
-                  >
-                    <button onClick={() => void copyNode(nodeContextMenu.kind, nodeContextMenu.id)}>
-                      <Copy size={14} />
-                      Copy
-                    </button>
-                    <button
-                      className="danger"
-                      onClick={() => void deleteNode(nodeContextMenu.kind, nodeContextMenu.id)}
-                    >
-                      <Trash2 size={14} />
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </section>
+              <CanvasPanel
+                canvasRef={canvasRef}
+                nodes={nodes}
+                edges={edges}
+                workflowExists={Boolean(workflow)}
+                nodeContextMenu={nodeContextMenu}
+                onNodesChange={onNodesChange}
+                onConnect={onConnect}
+                onClearContextMenu={() => setNodeContextMenu(null)}
+                onSelectNode={(kind, id) => {
+                  if (kind === "process") {
+                    setSelectedProcessId(id);
+                    setSelectedArtifactId("");
+                  } else {
+                    setSelectedArtifactId(id);
+                    setSelectedProcessId("");
+                  }
+                }}
+                onOpenContextMenu={setNodeContextMenu}
+                onDeleteEdge={(edgeId) => {
+                  if (workflow) {
+                    void api.deleteEdge(edgeId).then(() => loadWorkflow(workflow.id));
+                  }
+                }}
+                onUpdateNodePosition={(nodeId, x, y) => void updateNodePosition(nodeId, x, y)}
+                onAddProcess={() => void addProcess()}
+                onAddArtifact={(type) => void addArtifact(type)}
+                onCopyNode={(kind, id) => void copyNode(kind, id)}
+                onDeleteNode={(kind, id) => void deleteNode(kind, id)}
+              />
             </Panel>
 
             <PanelResizeHandle className="resize-handle resize-v" />
 
             <Panel defaultSize={38} minSize={12} className="pg-panel">
-              <section className="bottom-panel">
-                <div className="activity-head">
-                  <div>
-                    <strong>{selectedRun ? selectedRun.id : "No run selected"}</strong>
-                    {selectedRun && <StatusPill status={selectedRun.status} />}
-                  </div>
-                  <div className="cost-strip">
-                    <span>{usage.input_tokens} in</span>
-                    <span>{usage.output_tokens} out</span>
-                    <strong>{formatCost(usage.cost_usd)}</strong>
-                  </div>
-                </div>
-
-                {selectedRun && (
-                  <div className="activity-grid log-only">
-                    <LogViewer key={selectedRun.id} logs={selectedRun.logs} status={selectedRun.status} />
-                  </div>
-                )}
-              </section>
+              <ActivityPanel selectedRun={selectedRun} usage={usage} />
             </Panel>
           </PanelGroup>
         </Panel>
@@ -1527,460 +1320,66 @@ export function App() {
 
         <Panel defaultSize={26} minSize={15} className="pg-panel">
           <aside className="right-panel">
-            {selectedRun && (
-              <div className="review-panel embedded-review">
-                <div className="panel-title">
-                  <strong>Run Review</strong>
-                  <div className="button-cluster">
-                    <StatusPill status={selectedRun.status} />
-                    <button
-                      className="icon-button"
-                      title={reviewExpanded ? "Collapse review" : "Expand review"}
-                      onClick={() => setReviewExpanded((value) => !value)}
-                    >
-                      {reviewExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    </button>
-                  </div>
-                </div>
-                <div className="run-review-meta">
-                  <span>{selectedRun.id.slice(0, 12)}</span>
-                  <span>{usage.input_tokens} in</span>
-                  <span>{usage.output_tokens} out</span>
-                  <strong>{formatCost(usage.cost_usd)}</strong>
-                </div>
+            <RunReviewPanel
+              selectedRun={selectedRun}
+              usage={usage}
+              reviewExpanded={reviewExpanded}
+              pendingQA={pendingQA}
+              currentReview={currentReview}
+              processRuns={selectedProcess?.runs ?? []}
+              artifactById={artifactById}
+              qaAnswer={qaAnswer}
+              feedback={feedback}
+              diffBaseId={diffBaseId}
+              diffTargetId={diffTargetId}
+              diffText={diffText}
+              diffLoading={diffLoading}
+              onToggleExpanded={() => setReviewExpanded((value) => !value)}
+              onResumeRun={() => void resumeSelectedRun()}
+              onQaAnswerChange={setQaAnswer}
+              onAnswerQA={() => void answerQA()}
+              onFeedbackChange={setFeedback}
+              onReview={(action) => void review(action)}
+              onDiffBaseChange={setDiffBaseId}
+              onDiffTargetChange={setDiffTargetId}
+              onLoadDiff={() => void loadRunDiff()}
+            />
 
-                {reviewExpanded && (
-                  <>
-                    {selectedRun.status === "failed" && (
-                      <button className="icon-text" onClick={() => void resumeSelectedRun()}>
-                        <Play size={15} />
-                        Resume
-                      </button>
-                    )}
+            <ProcessInspector
+              processDraft={processDraft}
+              health={health}
+              skills={skills}
+              visibleSkills={visibleSkills}
+              skillSearch={skillSearch}
+              expandedSkillKeys={expandedSkillKeys}
+              goalRef={goalRef}
+              suggestOpen={suggestOpen}
+              goalArtifacts={goalArtifacts}
+              agentsBase={agentsBase}
+              onRun={() => processDraft && void runProcess(processDraft.id)}
+              onSave={() => void saveProcess()}
+              onDelete={() => void deleteSelectedProcess()}
+              onUpdateDraft={updateProcessDraft}
+              onSkillSearchChange={setSkillSearch}
+              onToggleSkill={toggleSkill}
+              onToggleSkillDetails={toggleSkillDetails}
+              onGoalChange={onGoalChange}
+              onInsertArtifactToken={insertArtifactToken}
+            />
 
-                    {pendingQA && (
-                      <div className="qa-block">
-                        <div className="panel-title compact">
-                          <strong>QA</strong>
-                          <MessageSquare size={15} />
-                        </div>
-                        <p>{pendingQA.question_text}</p>
-                        <textarea value={qaAnswer} onChange={(event) => setQaAnswer(event.target.value)} rows={3} />
-                        <button className="icon-text" onClick={() => void answerQA()}>
-                          <Check size={15} />
-                          Answer
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="panel-title compact">
-                      <strong>Review</strong>
-                      {currentReview && <StatusPill status={currentReview.status} />}
-                    </div>
-                    <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={4} />
-                    <div className="button-row">
-                      <button
-                        className="icon-text"
-                        onClick={() => void review("approve")}
-                        disabled={selectedRun.status !== "in_review"}
-                      >
-                        <Check size={15} />
-                        Approve
-                      </button>
-                      <button
-                        className="icon-text danger"
-                        onClick={() => void review("reject")}
-                        disabled={selectedRun.status !== "in_review"}
-                      >
-                        <X size={15} />
-                        Reject
-                      </button>
-                    </div>
-
-                    <div className="panel-title compact">
-                      <strong>Version Diff</strong>
-                    </div>
-                    <div className="diff-controls">
-                      <select value={diffBaseId} onChange={(event) => setDiffBaseId(event.target.value)}>
-                        <option value="">Base run</option>
-                        {(selectedProcess?.runs ?? []).map((run) => (
-                          <option key={run.id} value={run.id}>
-                            {run.id.slice(0, 12)} ({run.status})
-                          </option>
-                        ))}
-                      </select>
-                      <select value={diffTargetId} onChange={(event) => setDiffTargetId(event.target.value)}>
-                        <option value="">Target run</option>
-                        {(selectedProcess?.runs ?? []).map((run) => (
-                          <option key={run.id} value={run.id}>
-                            {run.id.slice(0, 12)} ({run.status})
-                          </option>
-                        ))}
-                      </select>
-                      <button className="icon-text" onClick={() => void loadRunDiff()} disabled={diffLoading}>
-                        <RefreshCw size={15} />
-                        Diff
-                      </button>
-                    </div>
-                    {diffText && <pre className="diff-view">{diffText}</pre>}
-                  </>
-                )}
-
-                <div className="panel-title compact">
-                  <strong>Artifacts</strong>
-                  <span className="muted-line">{selectedRun.artifacts.length}</span>
-                </div>
-                {selectedRun.artifacts.length === 0 && <div className="muted-line">No artifacts submitted.</div>}
-                {selectedRun.artifacts.length > 0 && (
-                  <div className="artifact-list">
-                    {selectedRun.artifacts.map((artifact) => {
-                      const label = artifactById.get(artifact.artifact_id)?.name ?? artifact.artifact_id.slice(0, 12);
-                      return (
-                        <div key={artifact.id} className="artifact-row">
-                          <span>{label}</span>
-                          {artifact.artifact_type === "file" && (
-                            <a
-                              href={artifactDownloadUrl(selectedRun.id, artifact.artifact_id)}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {artifact.file_path}
-                            </a>
-                          )}
-                          {artifact.artifact_type === "url" && (
-                            <a href={artifact.url ?? ""} target="_blank" rel="noreferrer">
-                              {artifact.url}
-                            </a>
-                          )}
-                          {artifact.artifact_type === "text" && (
-                            <textarea readOnly value={artifact.text_value ?? ""} rows={3} />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {processDraft && (
-              <>
-                <div className="panel-title">
-                  <strong>Process</strong>
-                  <div className="button-cluster">
-                    <button className="icon-button" title="Run" onClick={() => void runProcess(processDraft.id)}>
-                      <Play size={16} />
-                    </button>
-                    <button className="icon-button" title="Save" onClick={() => void saveProcess()}>
-                      <Save size={16} />
-                    </button>
-                    <button className="icon-button danger" title="Delete" onClick={() => void deleteSelectedProcess()}>
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-
-                <label>
-                  Name
-                  <input
-                    value={processDraft.name}
-                    onChange={(event) => updateProcessDraft("name", event.target.value)}
-                  />
-                </label>
-                <div className="two-col">
-                  <label>
-                    Agent
-                    <select
-                      value={processDraft.agent_kind}
-                      onChange={(event) => updateProcessDraft("agent_kind", event.target.value)}
-                    >
-                      <option value="claude">claude</option>
-                    </select>
-                  </label>
-                  <label>
-                    Model
-                    <select
-                      value={processDraft.agent_model}
-                      onChange={(event) => updateProcessDraft("agent_model", event.target.value)}
-                    >
-                      {!MODEL_OPTIONS.includes(processDraft.agent_model) && (
-                        <option value={processDraft.agent_model}>{processDraft.agent_model}</option>
-                      )}
-                      {MODEL_OPTIONS.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <label>
-                  Effort
-                  <select
-                    value={processDraft.agent_effort || "medium"}
-                    onChange={(event) => updateProcessDraft("agent_effort", event.target.value)}
-                  >
-                    {EFFORT_OPTIONS.map((effort) => (
-                      <option key={effort} value={effort}>
-                        {effort}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <div className="field-block">
-                  <span>Permissions</span>
-                  <label>
-                    Mode
-                    <select
-                      value={processDraft.permission_mode}
-                      onChange={(event) => updateProcessDraft("permission_mode", event.target.value)}
-                    >
-                      <option value="">inherit ({health?.default_permission_mode ?? "default"})</option>
-                      {PERMISSION_MODES.map((mode) => (
-                        <option key={mode} value={mode}>
-                          {mode}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Allowed tools (comma-separated)
-                    <input
-                      value={processDraft.allowed_tools}
-                      placeholder={health?.default_allowed_tools ?? ""}
-                      onChange={(event) => updateProcessDraft("allowed_tools", event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Disallowed tools
-                    <input
-                      value={processDraft.disallowed_tools}
-                      placeholder={health?.default_disallowed_tools || "(none)"}
-                      onChange={(event) => updateProcessDraft("disallowed_tools", event.target.value)}
-                    />
-                  </label>
-                  <small className="muted-line">
-                    Empty = inherit global default. Submission runs utils/submit.py via Bash, so the effective
-                    permissions must allow it (the default allowlist covers python; or use bypassPermissions).
-                  </small>
-                </div>
-
-                <div className="field-block">
-                  <span>Skills</span>
-                  <div className="skill-search">
-                    <Search size={14} />
-                    <input
-                      aria-label="Search skills"
-                      value={skillSearch}
-                      placeholder="Search skills"
-                      onChange={(event) => setSkillSearch(event.target.value)}
-                    />
-                  </div>
-                  <div className="skill-count">
-                    {visibleSkills.length} / {skills.length} shown
-                    {processDraft.skills.length > 0 ? `, ${processDraft.skills.length} selected` : ""}
-                  </div>
-                  <div className="skill-list">
-                    {skills.length === 0 && <div className="muted-line">No skills found</div>}
-                    {skills.length > 0 && visibleSkills.length === 0 && (
-                      <div className="muted-line">No matching skills</div>
-                    )}
-                    {visibleSkills.map((skill) => {
-                      const key = skillKey(skill);
-                      const expanded = expandedSkillKeys.has(key);
-                      const checked = processDraft.skills.some(
-                        (item) => `${item.skill_source}:${item.skill_ref}` === key
-                      );
-                      return (
-                        <div className={`skill-card ${checked ? "selected" : ""}`} key={key}>
-                          <div className="skill-row">
-                            <label className="skill-check">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) => toggleSkill(skill, event.target.checked)}
-                              />
-                              <span>
-                                <strong>{skill.name}</strong>
-                                <small>{skill.skill_source}</small>
-                              </span>
-                            </label>
-                            <button
-                              className="icon-button skill-expand"
-                              title={expanded ? "Hide skill details" : "Show skill details"}
-                              onClick={() => toggleSkillDetails(key)}
-                            >
-                              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            </button>
-                          </div>
-                          {expanded && (
-                            <div className="skill-detail">
-                              <p>{skill.description || "No description."}</p>
-                              <div className="skill-detail-grid">
-                                <span>Ref</span>
-                                <code>{skill.skill_ref}</code>
-                                <span>Path</span>
-                                <code>{skill.path}</code>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="goal-box">
-                  <label>
-                    Goal.md
-                    <textarea
-                      ref={goalRef}
-                      value={processDraft.goal_md}
-                      onChange={(event) => onGoalChange(event.target.value, event.target.selectionStart)}
-                      onKeyUp={(event) => onGoalChange(event.currentTarget.value, event.currentTarget.selectionStart)}
-                      rows={8}
-                    />
-                  </label>
-                  {suggestOpen && (
-                    <div className="suggest-list">
-                      {goalArtifacts.map((artifact) => (
-                        <button key={artifact.id} onClick={() => insertArtifactToken(artifact)}>
-                          {artifact.name}
-                        </button>
-                      ))}
-                      {goalArtifacts.length === 0 && <div className="muted-line">No connected artifacts</div>}
-                    </div>
-                  )}
-                </div>
-
-                <details className="agents-base">
-                  <summary>AGENTS.md (base template, read-only)</summary>
-                  <pre className="readonly-pre">{agentsBase || "(empty)"}</pre>
-                </details>
-
-                <label>
-                  AGENTS.md Append
-                  <textarea
-                    value={processDraft.agents_md_append}
-                    onChange={(event) => updateProcessDraft("agents_md_append", event.target.value)}
-                    rows={5}
-                  />
-                </label>
-              </>
-            )}
-
-            {artifactDraft && (
-              <>
-                <div className="panel-title">
-                  <strong>Artifact</strong>
-                  <div className="button-cluster">
-                    <button className="icon-button" title="Save" onClick={() => void saveArtifact()}>
-                      <Save size={16} />
-                    </button>
-                    <button className="icon-button danger" title="Delete" onClick={() => void deleteSelectedArtifact()}>
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-                <label>
-                  Name
-                  <input
-                    value={artifactDraft.name}
-                    onChange={(event) => updateArtifactDraft("name", event.target.value)}
-                  />
-                </label>
-                <label>
-                  Type
-                  <select
-                    value={artifactDraft.type}
-                    onChange={(event) => updateArtifactDraft("type", event.target.value as ArtifactType)}
-                  >
-                    <option value="text">text</option>
-                    <option value="file">file</option>
-                    <option value="url">url</option>
-                  </select>
-                </label>
-                {selectedArtifactProducer && (
-                  <div className="field-block generated-source-note">
-                    <span>Source</span>
-                    <div className="muted-line">
-                      Generated by {selectedArtifactProducerName}. User source input is disabled.
-                    </div>
-                  </div>
-                )}
-                {!selectedArtifactProducer && artifactDraft.type === "text" && (
-                  <label>
-                    Source Text
-                    <textarea
-                      value={artifactDraft.source_text ?? ""}
-                      onChange={(event) => updateArtifactDraft("source_text", event.target.value)}
-                      rows={7}
-                    />
-                  </label>
-                )}
-                {!selectedArtifactProducer && artifactDraft.type === "url" && (
-                  <label>
-                    Source URL
-                    <input
-                      value={artifactDraft.source_url ?? ""}
-                      onChange={(event) => updateArtifactDraft("source_url", event.target.value)}
-                    />
-                  </label>
-                )}
-                {!selectedArtifactProducer && artifactDraft.type === "file" && (
-                  <div className="field-block">
-                    <span>Source File</span>
-                    <input
-                      type="file"
-                      onChange={(event) => void uploadArtifactSourceFile(event.target.files?.[0] ?? null)}
-                    />
-                    {artifactDraft.source_file_path ? (
-                      <div className="muted-line">Uploaded: {sourceFileName(artifactDraft.source_file_path)}</div>
-                    ) : (
-                      <div className="muted-line">No file uploaded.</div>
-                    )}
-                  </div>
-                )}
-                <div className="field-block">
-                  <span>Latest Approved Output</span>
-                  {!artifactApprovedRun && !artifactPreviewLoading && (
-                    <div className="muted-line">No approved output for this artifact yet.</div>
-                  )}
-                  {artifactPreviewLoading && <div className="muted-line">Loading approved output...</div>}
-                  {artifactApprovedRun && (
-                    <div className="artifact-row">
-                      <span>
-                        {artifactApprovedRun.id.slice(0, 12)} ({artifactApprovedRun.status})
-                      </span>
-                      {artifactApprovedValue?.artifact_type === "file" && (
-                        <a
-                          href={artifactDownloadUrl(artifactApprovedRun.id, artifactApprovedValue.artifact_id)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {artifactApprovedValue.file_path}
-                        </a>
-                      )}
-                      {artifactApprovedValue?.artifact_type === "url" && (
-                        <a href={artifactApprovedValue.url ?? ""} target="_blank" rel="noreferrer">
-                          {artifactApprovedValue.url}
-                        </a>
-                      )}
-                      {artifactApprovedValue?.artifact_type === "text" && (
-                        <textarea readOnly value={artifactPreviewText} rows={7} />
-                      )}
-                      {artifactApprovedValue?.artifact_type === "file" && (
-                        <textarea readOnly value={artifactPreviewText} rows={7} />
-                      )}
-                      {!artifactApprovedValue && (
-                        <div className="muted-line">The approved run has no value for this artifact.</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+            <ArtifactInspector
+              artifactDraft={artifactDraft}
+              selectedArtifactProducer={selectedArtifactProducer}
+              selectedArtifactProducerName={selectedArtifactProducerName}
+              artifactApprovedRun={artifactApprovedRun}
+              artifactApprovedValue={artifactApprovedValue}
+              artifactPreviewText={artifactPreviewText}
+              artifactPreviewLoading={artifactPreviewLoading}
+              onSave={() => void saveArtifact()}
+              onDelete={() => void deleteSelectedArtifact()}
+              onUpdateDraft={updateArtifactDraft}
+              onUploadSourceFile={(file) => void uploadArtifactSourceFile(file)}
+            />
 
             {!selectedRun && !processDraft && !artifactDraft && (
               <div className="empty-panel">Select a process or artifact</div>
