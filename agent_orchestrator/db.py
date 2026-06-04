@@ -1,41 +1,18 @@
 from __future__ import annotations
 
-import json
 import sqlite3
-import uuid
-from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
+from .agent_options import AGENT_EFFORT_VALUES, PERMISSION_MODE_VALUES
+from .db_connection import connect_sqlite
+from .db_ids import new_id, now_iso
+from .db_json import json_dump, json_load
 from .exceptions import ConflictError, NotFoundError, AppValidationError
 
 
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:16]}"
-
-
-AGENT_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
-
-# 空文字 "" はグローバル既定を継承する意味。
-PERMISSION_MODE_VALUES = {"", "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"}
-
-
-def _json_dump(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
-
-
-def _json_load(value: str | None, default: Any) -> Any:
-    if not value:
-        return default
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return default
+_json_dump = json_dump
+_json_load = json_load
 
 
 SCHEMA = """
@@ -175,18 +152,8 @@ class Store:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+    def connect(self):
+        return connect_sqlite(self.db_path)
 
     def init(self) -> None:
         with self.connect() as conn:
