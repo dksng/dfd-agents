@@ -21,12 +21,13 @@ import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useGoalAutocomplete } from "./hooks/useGoalAutocomplete";
 import { useHealth } from "./hooks/useHealth";
 import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
 import { artifactContent } from "./lib/artifactContent";
 import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
-import { artifactDisplayLabel, normalizeGoalForDisplay } from "./lib/goal";
+import { normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
 import { skillKey } from "./lib/skills";
 import type {
@@ -77,18 +78,15 @@ export function App() {
   const [feedback, setFeedback] = useState("");
   const [qaAnswer, setQaAnswer] = useState("");
   const [reviewExpanded, setReviewExpanded] = useState(true);
-  const [suggestOpen, setSuggestOpen] = useState(false);
   const [diffBaseId, setDiffBaseId] = useState("");
   const [diffTargetId, setDiffTargetId] = useState("");
   const [diffText, setDiffText] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
-  const [goalCursor, setGoalCursor] = useState(0);
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const [nodeContextMenu, setNodeContextMenu] = useState<CanvasNodeContextMenu>(null);
-  const goalRef = useRef<HTMLTextAreaElement | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
   const workflowImportRef = useRef<HTMLInputElement | null>(null);
   const workflowIdRef = useRef<string | null>(null);
@@ -197,6 +195,12 @@ export function App() {
     toggleSkillDetails,
     visibleSkills
   } = useSkills({ processSkills: processDraft?.skills ?? [], setError });
+
+  const { goalArtifacts, goalRef, insertArtifactToken, onGoalChange, suggestOpen } = useGoalAutocomplete({
+    processDraft,
+    setProcessDraft,
+    workflow
+  });
 
   const loadInitial = useCallback(async () => {
     try {
@@ -545,10 +549,6 @@ export function App() {
     [workflow]
   );
 
-  const goalArtifacts = useMemo(() => {
-    return processDraft ? artifactsConnectedToProcess(workflow, processDraft.id) : [];
-  }, [processDraft, workflow]);
-
   async function selectWorkflow(workflowId: string) {
     if (!workflowId) {
       return;
@@ -782,29 +782,6 @@ export function App() {
         ]
       };
     });
-  }
-
-  function onGoalChange(value: string, cursor: number) {
-    updateProcessDraft("goal_md", value);
-    setGoalCursor(cursor);
-    setSuggestOpen(cursor > 0 && value[cursor - 1] === "/");
-  }
-
-  function insertArtifactToken(artifact: ArtifactNode) {
-    if (!processDraft) {
-      return;
-    }
-    const before = processDraft.goal_md.slice(0, Math.max(goalCursor - 1, 0));
-    const after = processDraft.goal_md.slice(goalCursor);
-    const token = `{${artifactDisplayLabel(artifact, goalArtifacts)}}`;
-    const next = `${before}${token}${after}`;
-    updateProcessDraft("goal_md", next);
-    setSuggestOpen(false);
-    window.setTimeout(() => {
-      const position = before.length + token.length;
-      goalRef.current?.setSelectionRange(position, position);
-      goalRef.current?.focus();
-    }, 0);
   }
 
   async function answerQA() {
