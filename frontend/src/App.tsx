@@ -21,6 +21,7 @@ import { RunReviewPanel } from "./components/RunReviewPanel";
 import { SettingsModal } from "./components/SettingsModal";
 import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useHealth } from "./hooks/useHealth";
 import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
 import { artifactContent } from "./lib/artifactContent";
@@ -32,7 +33,6 @@ import type {
   ArtifactNode,
   ArtifactType,
   CostSummary,
-  HealthInfo,
   ProcessNode,
   RunDetail,
   RunSummary,
@@ -83,7 +83,6 @@ export function App() {
   const [diffText, setDiffText] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const [goalCursor, setGoalCursor] = useState(0);
-  const [health, setHealth] = useState<HealthInfo | null>(null);
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
@@ -176,6 +175,8 @@ export function App() {
     });
   }, []);
 
+  const { health, refreshHealth } = useHealth();
+
   const {
     appSettings,
     expandedSkillKeys,
@@ -208,14 +209,11 @@ export function App() {
       const full = await loadWorkflow(list[0].id);
       setSelectedProcessId(full.processes[0]?.id ?? "");
       await loadInitialSkillState();
-      api
-        .getHealth()
-        .then(setHealth)
-        .catch(() => undefined);
+      void refreshHealth();
     } catch (exc) {
       setError(String(exc));
     }
-  }, [loadInitialSkillState, loadWorkflow]);
+  }, [loadInitialSkillState, loadWorkflow, refreshHealth]);
 
   useEffect(() => {
     void loadInitial();
