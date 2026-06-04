@@ -23,10 +23,10 @@ import { Topbar } from "./components/Topbar";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
 import { useGoalAutocomplete } from "./hooks/useGoalAutocomplete";
 import { useHealth } from "./hooks/useHealth";
+import { useRunReview } from "./hooks/useRunReview";
 import { useRunStream } from "./hooks/useRunStream";
 import { useSkills } from "./hooks/useSkills";
-import { artifactContent } from "./lib/artifactContent";
-import { downloadJsonDocument, simpleLineDiff } from "./lib/format";
+import { downloadJsonDocument } from "./lib/format";
 import { normalizeGoalForDisplay } from "./lib/goal";
 import { artifactPayload, processPayload } from "./lib/payloads";
 import { skillKey } from "./lib/skills";
@@ -75,13 +75,6 @@ export function App() {
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string>("");
-  const [feedback, setFeedback] = useState("");
-  const [qaAnswer, setQaAnswer] = useState("");
-  const [reviewExpanded, setReviewExpanded] = useState(true);
-  const [diffBaseId, setDiffBaseId] = useState("");
-  const [diffTargetId, setDiffTargetId] = useState("");
-  const [diffText, setDiffText] = useState("");
-  const [diffLoading, setDiffLoading] = useState(false);
   const [agentsBase, setAgentsBase] = useState("");
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
@@ -97,7 +90,6 @@ export function App() {
   const workflowSaveSeqRef = useRef(0);
   const fittedWorkflowRef = useRef("");
   const explicitRunSelectionRef = useRef("");
-  const reviewAutoCollapseKeyRef = useRef("");
   const processSaveAbortRef = useRef<AbortController | null>(null);
   const artifactSaveAbortRef = useRef<AbortController | null>(null);
   const workflowSaveAbortRef = useRef<AbortController | null>(null);
@@ -258,6 +250,35 @@ export function App() {
     [workflow]
   );
 
+  const {
+    answerQA,
+    currentReview,
+    diffBaseId,
+    diffLoading,
+    diffTargetId,
+    diffText,
+    feedback,
+    loadRunDiff,
+    pendingQA,
+    qaAnswer,
+    resumeSelectedRun,
+    reviewExpanded,
+    reviewRun,
+    setDiffBaseId,
+    setDiffTargetId,
+    setFeedback,
+    setQaAnswer,
+    setReviewExpanded,
+    setRunDiffPair
+  } = useRunReview({
+    artifactById,
+    loadWorkflow,
+    selectedRun,
+    setError,
+    setSelectedRun,
+    workflowId: workflow?.id ?? null
+  });
+
   useRunStream({
     selectedRun,
     setSelectedRun,
@@ -309,9 +330,7 @@ export function App() {
     draft.goal_md = normalizeGoalForDisplay(draft.goal_md, connectedArtifacts);
     setProcessDraft(draft);
     savedProcessRef.current = JSON.stringify(processPayload(draft, connectedArtifacts));
-    setDiffBaseId(selectedProcess.runs?.[1]?.id ?? "");
-    setDiffTargetId(selectedProcess.runs?.[0]?.id ?? "");
-    setDiffText("");
+    setRunDiffPair(selectedProcess.runs?.[1]?.id ?? "", selectedProcess.runs?.[0]?.id ?? "");
     api
       .getAgentsBase(selectedProcess.template_id || "base")
       .then((res) => setAgentsBase(res.content))
@@ -449,23 +468,6 @@ export function App() {
     }, 700);
     return () => window.clearTimeout(timer);
   }, [workflowNameDraft, workflow]);
-
-  const selectedRunId = selectedRun?.id;
-  const selectedRunStatus = selectedRun?.status;
-
-  useEffect(() => {
-    if (!selectedRunId) {
-      reviewAutoCollapseKeyRef.current = "";
-      setReviewExpanded(true);
-      return;
-    }
-    const key = `${selectedRunId}:${selectedRunStatus}`;
-    if (reviewAutoCollapseKeyRef.current === key) {
-      return;
-    }
-    reviewAutoCollapseKeyRef.current = key;
-    setReviewExpanded(selectedRunStatus !== "approved");
-  }, [selectedRunId, selectedRunStatus]);
 
   const computedNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const producerByArtifact = new Map<string, string>();
@@ -784,70 +786,6 @@ export function App() {
     });
   }
 
-  async function answerQA() {
-    const pending = selectedRun?.qa.find((item) => item.status === "pending");
-    if (!pending || !qaAnswer.trim()) {
-      return;
-    }
-    await api.answerQA(pending.id, qaAnswer);
-    setQaAnswer("");
-    setSelectedRun(await api.getRun(selectedRun!.id));
-  }
-
-  async function review(action: "approve" | "reject") {
-    if (!selectedRun) {
-      return;
-    }
-    const result = await api.reviewRun(selectedRun.id, action, feedback);
-    setSelectedRun(result);
-    setFeedback("");
-    if (workflow) {
-      await loadWorkflow(workflow.id);
-    }
-  }
-
-  async function resumeSelectedRun() {
-    if (!selectedRun || selectedRun.status !== "failed") {
-      return;
-    }
-    const result = await api.resumeRun(selectedRun.id, feedback);
-    setSelectedRun(result);
-    setFeedback("");
-    if (workflow) {
-      await loadWorkflow(workflow.id);
-    }
-  }
-
-  async function loadRunDiff() {
-    if (!diffBaseId || !diffTargetId || diffBaseId === diffTargetId) {
-      setDiffText("");
-      return;
-    }
-    setDiffLoading(true);
-    try {
-      const [base, target] = await Promise.all([api.getRun(diffBaseId), api.getRun(diffTargetId)]);
-      const artifactIds = Array.from(
-        new Set([
-          ...base.artifacts.map((artifact) => artifact.artifact_id),
-          ...target.artifacts.map((artifact) => artifact.artifact_id)
-        ])
-      );
-      const sections: string[] = [];
-      for (const artifactId of artifactIds) {
-        const beforeArtifact = base.artifacts.find((artifact) => artifact.artifact_id === artifactId);
-        const afterArtifact = target.artifacts.find((artifact) => artifact.artifact_id === artifactId);
-        const before = beforeArtifact ? await artifactContent(base, beforeArtifact) : "";
-        const after = afterArtifact ? await artifactContent(target, afterArtifact) : "";
-        sections.push(`## ${artifactById.get(artifactId)?.name ?? artifactId}\n${simpleLineDiff(before, after)}`);
-      }
-      setDiffText(sections.join("\n\n"));
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      setDiffLoading(false);
-    }
-  }
-
   async function createWorkflow() {
     const created = await api.createWorkflow("New Workflow");
     setWorkflows((items) => [created, ...items]);
@@ -920,8 +858,6 @@ export function App() {
   }
 
   const usage = totalUsage(selectedRun);
-  const pendingQA = selectedRun?.qa.find((item) => item.status === "pending");
-  const currentReview = selectedRun?.reviews[selectedRun.reviews.length - 1];
   const runProcessSummaries = useMemo(
     () =>
       (workflow?.processes ?? []).map((process) => {
@@ -1077,7 +1013,7 @@ export function App() {
               onQaAnswerChange={setQaAnswer}
               onAnswerQA={() => void answerQA()}
               onFeedbackChange={setFeedback}
-              onReview={(action) => void review(action)}
+              onReview={(action) => void reviewRun(action)}
               onDiffBaseChange={setDiffBaseId}
               onDiffTargetChange={setDiffTargetId}
               onLoadDiff={() => void loadRunDiff()}
