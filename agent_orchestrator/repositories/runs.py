@@ -88,6 +88,37 @@ class RunRepository:
         run["artifacts"] = artifacts
         return run
 
+    ATTENTION_STATUSES = ("waiting_qa", "in_review", "failed")
+
+    def attention_summary(self) -> list[dict[str, Any]]:
+        """Per-workflow counts of processes whose latest run is in an attention status.
+
+        Derived from current state (no notification store): the badge reflects the
+        actual backlog needing human action and auto-clears as runs transition.
+        """
+        with self.connect() as conn:
+            rows = self._fetchall(
+                conn,
+                """
+                SELECT p.workflow_id AS workflow_id, latest.status AS status, COUNT(*) AS n
+                FROM process p
+                JOIN run latest ON latest.id = (
+                    SELECT id FROM run WHERE process_id = p.id
+                    ORDER BY started_at DESC, rowid DESC LIMIT 1
+                )
+                WHERE latest.status IN ('waiting_qa', 'in_review', 'failed')
+                GROUP BY p.workflow_id, latest.status
+                """,
+            )
+        summary: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            entry = summary.setdefault(
+                row["workflow_id"],
+                {"workflow_id": row["workflow_id"], "waiting_qa": 0, "in_review": 0, "failed": 0},
+            )
+            entry[row["status"]] = row["n"]
+        return list(summary.values())
+
     def latest_approved_run(self, process_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             run = self._fetchone(

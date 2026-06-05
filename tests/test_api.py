@@ -793,6 +793,28 @@ def test_edges_reject_cross_workflow_nodes(tmp_path: Path) -> None:
         assert cross_process.status_code == 422
 
 
+def test_attention_summary_reflects_latest_run_state(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "attn"}).json()
+        process = create_process(client, workflow["id"], "Impl", "implement")
+
+        # No runs yet -> no attention entries.
+        assert client.get("/api/attention").json() == []
+
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        wait_for_status(client, run["id"], {"in_review"})
+
+        summary = client.get("/api/attention").json()
+        entry = next(item for item in summary if item["workflow_id"] == workflow["id"])
+        assert entry["in_review"] == 1
+        assert entry["waiting_qa"] == 0
+        assert entry["failed"] == 0
+
+        # Approving clears the attention count (derived from current state).
+        client.post(f"/api/runs/{run['id']}/review", json={"action": "approve"})
+        assert client.get("/api/attention").json() == []
+
+
 def test_qa_answer_flow(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "qa"}).json()

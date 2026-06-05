@@ -1229,3 +1229,43 @@ textarea {
   max-height: 120px;
   overflow: auto;
 }
+
+/* ---- Workflow attention badges ---- */
+.run-row .attn-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.attn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px 1px 4px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.attn-waiting_qa {
+  background: #e0edff;
+  color: #1d4ed8;
+}
+
+.attn-in_review {
+  background: #def7ec;
+  color: #047857;
+}
+
+.attn-failed {
+  background: #fde2e1;
+  color: #b42318;
+}
+
+.topbar .icon-button.active {
+  border-color: #2563eb;
+  color: #2563eb;
+}

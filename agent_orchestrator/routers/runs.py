@@ -93,6 +93,12 @@ def run_cost(run_id: str, store: Store = Depends(get_store)) -> dict:
     return store.run_cost(run_id)
 
 
+@router.get("/attention")
+def attention(store: Store = Depends(get_store)) -> list[dict]:
+    """Per-workflow counts of processes whose latest run needs human attention."""
+    return store.attention_summary()
+
+
 @ws_router.websocket("/ws/runs/{run_id}")
 async def run_ws(run_id: str, websocket: WebSocket) -> None:
     await websocket.app.state.hub.connect(run_id, websocket)
@@ -101,3 +107,14 @@ async def run_ws(run_id: str, websocket: WebSocket) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         await websocket.app.state.hub.disconnect(run_id, websocket)
+
+
+@ws_router.websocket("/ws/events")
+async def events_ws(websocket: WebSocket) -> None:
+    """Global stream of all run events (cross-workflow), used for notifications/badges."""
+    await websocket.app.state.hub.connect_global(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await websocket.app.state.hub.disconnect_global(websocket)

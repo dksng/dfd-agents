@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   ArtifactNode,
+  AttentionSummary,
   CostSummary,
   HealthInfo,
   ProcessNode,
@@ -139,15 +140,24 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getAgentsBase: (templateId: string) =>
-    request<{ template_id: string; content: string }>(`/api/templates/${templateId}/agents-base`)
+    request<{ template_id: string; content: string }>(`/api/templates/${templateId}/agents-base`),
+  getAttention: () => request<AttentionSummary[]>("/api/attention")
 };
 
-export function wsUrl(runId: string): string {
+function wsBase(): string {
   if (API_BASE.startsWith("http")) {
-    return `${API_BASE.replace(/^http/, "ws")}/ws/runs/${runId}`;
+    return API_BASE.replace(/^http/, "ws");
   }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/runs/${runId}`;
+  return `${protocol}//${window.location.host}`;
+}
+
+export function wsUrl(runId: string): string {
+  return `${wsBase()}/ws/runs/${runId}`;
+}
+
+export function eventsWsUrl(): string {
+  return `${wsBase()}/ws/events`;
 }
 
 export function artifactDownloadUrl(runId: string, artifactId: string): string {

@@ -34,6 +34,7 @@ class ExecutionEngine:
         self.pricing = pricing
         self.workspace_builder = workspace_builder
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._run_meta: dict[str, tuple[str, str]] = {}
 
     async def start_process(self, process_id: str) -> dict[str, Any]:
         process = self.store.get_process(process_id)
@@ -284,5 +285,26 @@ class ExecutionEngine:
         row = self.store.add_log(run_id, level, message, raw_json)
         await self._publish(run_id, "log", row)
 
+    def _run_identity(self, run_id: str) -> tuple[str, str]:
+        """Resolve and cache (process_id, workflow_id) for a run (immutable per run)."""
+        cached = self._run_meta.get(run_id)
+        if cached is not None:
+            return cached
+        run = self.store.get_run(run_id)
+        process = self.store.get_process(run["process_id"])
+        identity = (run["process_id"], process["workflow_id"])
+        self._run_meta[run_id] = identity
+        return identity
+
     async def _publish(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        await self.hub.publish(run_id, {"type": event_type, "payload": payload})
+        process_id, workflow_id = self._run_identity(run_id)
+        await self.hub.publish(
+            run_id,
+            {
+                "type": event_type,
+                "run_id": run_id,
+                "process_id": process_id,
+                "workflow_id": workflow_id,
+                "payload": payload,
+            },
+        )

@@ -17,6 +17,7 @@ import { useDrafts } from "./hooks/useDrafts";
 import { useFlowGraph } from "./hooks/useFlowGraph";
 import { useGoalAutocomplete } from "./hooks/useGoalAutocomplete";
 import { useHealth } from "./hooks/useHealth";
+import { useNotifications } from "./hooks/useNotifications";
 import { useRunReview } from "./hooks/useRunReview";
 import { useRunSummaries } from "./hooks/useRunSummaries";
 import { useRunStream } from "./hooks/useRunStream";
@@ -301,11 +302,52 @@ export function App() {
 
   const { runProcessSummaries, usage, workflowRunCost } = useRunSummaries(workflow, selectedRun);
 
+  const resolveNotificationLabel = useCallback(
+    (workflowId: string, processId: string) => {
+      if (workflow?.id === workflowId) {
+        const process = workflow.processes.find((item) => item.id === processId);
+        if (process) return process.name;
+      }
+      return workflows.find((item) => item.id === workflowId)?.name;
+    },
+    [workflow, workflows]
+  );
+
+  const openNotificationTarget = useCallback(
+    ({ workflowId, runId }: { workflowId: string; runId: string }) => {
+      const navigate = async () => {
+        if (workflow?.id !== workflowId) {
+          await selectWorkflow(workflowId);
+        }
+        explicitRunSelectionRef.current = runId;
+        try {
+          const run = await api.getRun(runId);
+          selectProcess(run.process_id);
+          setSelectedRun(run);
+        } catch (exc) {
+          setError(String(exc));
+        }
+      };
+      void navigate();
+    },
+    [workflow, selectWorkflow, selectProcess, setSelectedRun, setError]
+  );
+
+  const notifySupported = typeof window !== "undefined" && "Notification" in window;
+  const { enabled: notifyEnabled, toggle: toggleNotify, attentionFor } = useNotifications({
+    resolveLabel: resolveNotificationLabel,
+    currentRunId: selectedRun?.id,
+    onOpen: openNotificationTarget
+  });
+
   return (
     <div className="app-shell">
       <Topbar
         workflowNameDraft={workflowNameDraft}
         cost={cost}
+        notifyEnabled={notifyEnabled}
+        notifySupported={notifySupported}
+        onToggleNotify={toggleNotify}
         onWorkflowNameChange={setWorkflowNameDraft}
         onOpenSettings={() => void openSettingsModal()}
       />
@@ -359,6 +401,7 @@ export function App() {
             onImportWorkflowFile={(file) => void importWorkflowFile(file)}
             onDeleteWorkflow={() => void deleteCurrentWorkflow()}
             onSelectWorkflow={(workflowId) => void selectWorkflow(workflowId)}
+            attentionFor={attentionFor}
             onRefreshWorkflow={() => void refreshWorkflow()}
             onSelectProcess={selectProcess}
             onToggleRunProcess={toggleRunProcess}

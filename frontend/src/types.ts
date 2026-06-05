@@ -170,3 +170,18 @@ export interface CostSummary {
   cache_write: number;
   cost_usd: number;
 }
+
+export interface AttentionSummary {
+  workflow_id: string;
+  waiting_qa: number;
+  in_review: number;
+  failed: number;
+}
+
+export interface GlobalEvent {
+  type: string;
+  run_id: string;
+  process_id: string;
+  workflow_id: string;
+  payload: Record<string, unknown>;
+}

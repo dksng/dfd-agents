@@ -1,8 +1,38 @@
-import { ChevronDown, ChevronRight, Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Inbox,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload
+} from "lucide-react";
 import type { RefObject } from "react";
 import { formatCost } from "../lib/format";
-import type { ProcessNode, RunSummary, Workflow } from "../types";
+import type { AttentionSummary, ProcessNode, RunSummary, Workflow } from "../types";
 import { StatusPill } from "./StatusPill";
+
+function AttentionBadges({ attention }: { attention: AttentionSummary }) {
+  const items: { key: string; count: number; title: string; icon: typeof Inbox }[] = [
+    { key: "waiting_qa", count: attention.waiting_qa, title: "QA待ち", icon: MessageSquare },
+    { key: "in_review", count: attention.in_review, title: "レビュー待ち", icon: Inbox },
+    { key: "failed", count: attention.failed, title: "失敗", icon: AlertTriangle }
+  ].filter((item) => item.count > 0);
+  if (items.length === 0) return null;
+  return (
+    <span className="attn-badges">
+      {items.map(({ key, count, title, icon: Icon }) => (
+        <span key={key} className={`attn-badge attn-${key}`} title={`${title}: ${count}`}>
+          <Icon size={12} />
+          {count}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export type RunProcessSummary = {
   process: ProcessNode;
@@ -25,6 +55,7 @@ type LeftPanelProps = {
   onImportWorkflowFile: (file: File | null) => void;
   onDeleteWorkflow: () => void;
   onSelectWorkflow: (workflowId: string) => void;
+  attentionFor: (workflowId: string) => AttentionSummary;
   onRefreshWorkflow: () => void;
   onSelectProcess: (processId: string) => void;
   onToggleRunProcess: (processId: string) => void;
@@ -45,6 +76,7 @@ export function LeftPanel({
   onImportWorkflowFile,
   onDeleteWorkflow,
   onSelectWorkflow,
+  attentionFor,
   onRefreshWorkflow,
   onSelectProcess,
   onToggleRunProcess,
@@ -92,6 +124,7 @@ export function LeftPanel({
               <span>{item.name}</span>
               <small>{item.id.slice(0, 12)}</small>
             </span>
+            <AttentionBadges attention={attentionFor(item.id)} />
           </button>
         ))}
         {workflows.length === 0 && <div className="muted-line">No workflows yet</div>}
