@@ -116,8 +116,16 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
     }
     if (!status || !notifyEventsRef.current.includes(status)) return;
 
-    // Suppress for the run the user is actively viewing in a visible tab.
-    if (currentRunRef.current === event.run_id && document.visibilityState === "visible") return;
+    // Only suppress the QA prompt for the run the user is actively viewing
+    // (the QA panel is already on screen). Completion/failure should always
+    // notify, even while watching the run, so "done" never goes unnoticed.
+    if (
+      status === "waiting_qa" &&
+      currentRunRef.current === event.run_id &&
+      document.visibilityState === "visible"
+    ) {
+      return;
+    }
 
     const dedupeKey = `${event.run_id}:${status}`;
     if (notifiedRef.current.has(dedupeKey)) return;
