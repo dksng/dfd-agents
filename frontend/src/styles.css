@@ -507,6 +507,12 @@ textarea {
   --node-bg: #f5f3ff;
 }
 
+.node-state-upstream_pending {
+  --node-accent: #0f766e;
+  --node-border: #5eead4;
+  --node-bg: #f0fdfa;
+}
+
 .node-state-approved,
 .node-state-source_ready {
   --node-accent: #059669;
@@ -608,6 +614,11 @@ textarea {
 .status.stale {
   background: #ede9fe;
   color: #5b21b6;
+}
+
+.status.upstream_pending {
+  background: #ccfbf1;
+  color: #115e59;
 }
 
 .status.approved {

@@ -3,6 +3,7 @@ export function StatusPill({ status }: { status?: string }) {
   const labels: Record<string, string> = {
     not_started: "not started",
     stale: "needs rerun",
+    upstream_pending: "upstream pending",
     waiting_qa: "waiting qa",
     source_ready: "source ready",
     source_missing: "source missing"

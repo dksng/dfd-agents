@@ -27,6 +27,10 @@ function latestApprovedRun(process: ProcessNode | undefined): RunSummary | undef
   return process?.runs.find((run) => run.status === "approved");
 }
 
+function latestRun(process: ProcessNode | undefined): RunSummary | undefined {
+  return process?.runs[0];
+}
+
 function runStartedAfter(candidate: RunSummary | undefined, baseline: RunSummary | undefined): boolean {
   if (!candidate || !baseline) {
     return false;
@@ -34,8 +38,12 @@ function runStartedAfter(candidate: RunSummary | undefined, baseline: RunSummary
   return Date.parse(candidate.started_at) > Date.parse(baseline.started_at);
 }
 
-function canBecomeStale(state: string): boolean {
-  return state === "approved" || state === "in_review";
+function runMayProduceNewOutput(run: RunSummary | undefined): boolean {
+  return Boolean(run && ["draft", "running", "waiting_qa", "in_review"].includes(run.status));
+}
+
+function canShowDependencyState(state: string): boolean {
+  return state === "approved" || state === "in_review" || state === "upstream_pending";
 }
 
 function baseProcessState(process: ProcessNode): string {
@@ -66,6 +74,7 @@ function buildNodeStates(
   producerByArtifact: Map<string, string>
 ): { artifactStateById: Map<string, string>; processStateById: Map<string, string> } {
   const processById = new Map(processes.map((process) => [process.id, process]));
+  const artifactById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
   const consumesByProcess = new Map<string, WorkflowEdge[]>();
   for (const edge of edges) {
     if (edge.kind === "consumes") {
@@ -98,23 +107,40 @@ function buildNodeStates(
     for (const process of processes) {
       const current = processStateById.get(process.id) ?? "not_started";
       const latest = process.runs?.[0];
-      if (!latest || !canBecomeStale(current)) {
+      if (!latest || !canShowDependencyState(current)) {
         continue;
       }
-      const stale = (consumesByProcess.get(process.id) ?? []).some((edge) => {
-        if (artifactStateById.get(edge.artifact_id) === "stale") {
-          return true;
+      let hasStaleInput = false;
+      let hasPendingInput = false;
+      for (const edge of consumesByProcess.get(process.id) ?? []) {
+        const artifactState = artifactStateById.get(edge.artifact_id);
+        if (artifactState === "stale") {
+          hasStaleInput = true;
+          break;
         }
-        const artifact = artifacts.find((item) => item.id === edge.artifact_id);
+        if (artifactState === "upstream_pending") {
+          hasPendingInput = true;
+          continue;
+        }
+        const artifact = artifactById.get(edge.artifact_id);
         const producerId = producerByArtifact.get(edge.artifact_id);
         const producer = producerId ? processById.get(producerId) : undefined;
         if (producer) {
-          return runStartedAfter(latestApprovedRun(producer), latest);
+          if (runStartedAfter(latestApprovedRun(producer), latest)) {
+            hasStaleInput = true;
+            break;
+          }
+          if (runMayProduceNewOutput(latestRun(producer))) {
+            hasPendingInput = true;
+          }
+        } else if (artifact && sourceChangedSinceRun(artifact, latest)) {
+          hasStaleInput = true;
+          break;
         }
-        return artifact ? sourceChangedSinceRun(artifact, latest) : false;
-      });
-      if (stale) {
-        processStateById.set(process.id, "stale");
+      }
+      const next = hasStaleInput ? "stale" : hasPendingInput ? "upstream_pending" : "";
+      if (next && current !== next) {
+        processStateById.set(process.id, next);
         changed = true;
       }
     }
