@@ -243,6 +243,23 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
   }, []);
 
   const toggle = useCallback(() => {
+    if (enabled && supported && Notification.permission !== "granted") {
+      void Notification.requestPermission().then((result) => {
+        setPermission(result);
+        if (result === "granted") {
+          fireTestNotification();
+        } else {
+          showToast({
+            title: "Desktop notifications blocked",
+            body: "Allow notifications for this site in your browser settings (and check OS Focus Assist). In-app toasts will be used meanwhile.",
+            workflowId: "",
+            runId: ""
+          });
+        }
+      });
+      return;
+    }
+
     const next = !enabled;
     setEnabled(next);
     localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
