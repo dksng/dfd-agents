@@ -150,6 +150,8 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
     const body = bodyByStatus[status];
     if (!title || !body) return;
 
+    // Best-effort desktop popup (may be silently suppressed by the OS, e.g.
+    // Windows Focus Assist), so we cannot rely on it being shown.
     if (supported && Notification.permission === "granted") {
       try {
         const notification = new Notification(title, { body, tag: event.run_id });
@@ -158,11 +160,11 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
           onOpenRef.current?.({ workflowId: event.workflow_id, runId: event.run_id });
           notification.close();
         };
-        return;
       } catch {
-        /* Fall back to an in-app toast below. */
+        /* ignore; the in-app toast below is the reliable channel */
       }
     }
+    // Always show an in-app toast — reliable regardless of OS/browser settings.
     showToast({ title, body, workflowId: event.workflow_id, runId: event.run_id });
   }, [showToast]);
 
@@ -229,18 +231,27 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
   }, [refreshAttention, fireNotification]);
 
   const fireTestNotification = useCallback(() => {
-    try {
-      const notification = new Notification("Desktop notifications enabled", {
-        body: "You'll be notified on QA, review, and failures."
-      });
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
-    } catch {
-      /* ignore */
+    if (supported && Notification.permission === "granted") {
+      try {
+        const notification = new Notification("Notifications enabled", {
+          body: "You'll be notified on QA, review, and failures."
+        });
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      } catch {
+        /* ignore; toast below is the reliable confirmation */
+      }
     }
-  }, []);
+    // Reliable in-app confirmation even when the OS suppresses desktop popups.
+    showToast({
+      title: "Notifications enabled",
+      body: "QA / review / failures will appear here (and as desktop popups if your OS allows).",
+      workflowId: "",
+      runId: ""
+    });
+  }, [showToast]);
 
   const toggle = useCallback(() => {
     if (enabled && supported && Notification.permission !== "granted") {
