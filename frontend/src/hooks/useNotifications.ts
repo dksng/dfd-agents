@@ -228,6 +228,20 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
     };
   }, [refreshAttention, fireNotification]);
 
+  const fireTestNotification = useCallback(() => {
+    try {
+      const notification = new Notification("Desktop notifications enabled", {
+        body: "You'll be notified on QA, review, and failures."
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const toggle = useCallback(() => {
     const next = !enabled;
     setEnabled(next);
@@ -240,12 +254,35 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
       .catch(() => {
         /* Local toggle still works for this tab. */
       });
-    if (next && supported && Notification.permission === "default") {
-      void Notification.requestPermission().then((result) => {
-        setPermission(result);
+    if (!next) return;
+    if (!supported) {
+      showToast({
+        title: "Desktop notifications unavailable",
+        body: "This browser has no notification support; in-app toasts will be used.",
+        workflowId: "",
+        runId: ""
       });
+      return;
     }
-  }, [enabled]);
+    if (Notification.permission === "granted") {
+      fireTestNotification();
+      return;
+    }
+    // Request once (resolves immediately to "denied" if the user blocked it before).
+    void Notification.requestPermission().then((result) => {
+      setPermission(result);
+      if (result === "granted") {
+        fireTestNotification();
+      } else {
+        showToast({
+          title: "Desktop notifications blocked",
+          body: "Allow notifications for this site in your browser settings (and check OS Focus Assist). In-app toasts will be used meanwhile.",
+          workflowId: "",
+          runId: ""
+        });
+      }
+    });
+  }, [enabled, fireTestNotification, showToast]);
 
   const attentionFor = useCallback(
     (workflowId: string): AttentionSummary => {

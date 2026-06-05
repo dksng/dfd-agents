@@ -1391,3 +1391,8 @@ textarea {
   border-color: #2563eb;
   color: #2563eb;
 }
+
+.topbar .icon-button.blocked {
+  border-color: #f59e0b;
+  color: #b45309;
+}

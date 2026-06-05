@@ -6,6 +6,7 @@ type TopbarProps = {
   cost: CostSummary | null;
   notifyEnabled: boolean;
   notifySupported: boolean;
+  notifyPermission: NotificationPermission | "unsupported";
   onToggleNotify: () => void;
   onWorkflowNameChange: (value: string) => void;
   onOpenSettings: () => void;
@@ -16,10 +17,12 @@ export function Topbar({
   cost,
   notifyEnabled,
   notifySupported,
+  notifyPermission,
   onToggleNotify,
   onWorkflowNameChange,
   onOpenSettings
 }: TopbarProps) {
+  const blocked = notifyEnabled && notifySupported && notifyPermission !== "granted";
   return (
     <header className="topbar">
       <div className="brand">
@@ -39,13 +42,15 @@ export function Topbar({
         <strong>${(cost?.cost_usd ?? 0).toFixed(5)}</strong>
       </div>
       <button
-        className={`icon-button ${notifyEnabled ? "active" : ""}`}
+        className={`icon-button ${notifyEnabled ? "active" : ""} ${blocked ? "blocked" : ""}`}
         title={
           !notifySupported
             ? "Desktop notifications are unavailable; app toasts will be used"
-            : notifyEnabled
-              ? "Disable desktop notifications"
-              : "Enable desktop notifications (QA / review / failures)"
+            : blocked
+              ? "Notifications are ON but the browser/OS is blocking desktop popups — allow this site in browser settings and check OS Focus Assist. In-app toasts are used meanwhile."
+              : notifyEnabled
+                ? "Notifications enabled (QA / review / failures)"
+                : "Enable notifications (QA / review / failures)"
         }
         onClick={onToggleNotify}
       >

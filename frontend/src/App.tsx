@@ -331,6 +331,7 @@ export function App() {
   const notifySupported = typeof window !== "undefined" && "Notification" in window;
   const {
     enabled: notifyEnabled,
+    permission: notifyPermission,
     toggle: toggleNotify,
     attentionFor,
     toasts: notificationToasts,
@@ -348,6 +349,7 @@ export function App() {
         cost={cost}
         notifyEnabled={notifyEnabled}
         notifySupported={notifySupported}
+        notifyPermission={notifyPermission}
         onToggleNotify={toggleNotify}
         onWorkflowNameChange={setWorkflowNameDraft}
         onOpenSettings={() => void openSettingsModal()}
