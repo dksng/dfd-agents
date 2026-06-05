@@ -36,7 +36,6 @@ function ArtifactIcon({ type }: { type: ArtifactType }) {
 }
 
 export function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
-  const latest = data.process.runs?.[0];
   const skills = data.process.skills ?? [];
   const skillLabel =
     skills.length === 0
@@ -69,7 +68,7 @@ export function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
           {compactModelName(data.process.agent_model)}
         </span>
         <span className="node-effort">{data.process.agent_effort || "medium"}</span>
-        <StatusPill status={latest?.status ?? "not_started"} />
+        <StatusPill status={data.state} />
       </div>
       <div className="node-skills" title={skills.map((skill) => skill.skill_name).join(", ") || "No skills"}>
         {skillLabel}

@@ -2,6 +2,7 @@ export function StatusPill({ status }: { status?: string }) {
   const value = status || "draft";
   const labels: Record<string, string> = {
     not_started: "not started",
+    stale: "needs rerun",
     waiting_qa: "waiting qa",
     source_ready: "source ready",
     source_missing: "source missing"
