@@ -9,6 +9,7 @@ export type ProcessNodeData = {
   selected: boolean;
   inputCount: number;
   outputCount: number;
+  state: string;
   onSelect: (id: string) => void;
   onRun: (id: string) => void;
 };
@@ -17,6 +18,7 @@ export type ArtifactNodeData = {
   artifact: ArtifactNode;
   selected: boolean;
   producerName?: string;
+  state: string;
   consumerCount: number;
   onSelect: (id: string) => void;
 };
@@ -44,7 +46,7 @@ export function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
         : `${skills[0].skill_name} +${skills.length - 1}`;
   return (
     <div
-      className={`flow-node process-node ${data.selected ? "selected" : ""}`}
+      className={`flow-node process-node node-state-${data.state} ${data.selected ? "selected" : ""}`}
       onClick={() => data.onSelect(data.process.id)}
     >
       <Handle id="consumes" type="target" position={Position.Left} />
@@ -67,7 +69,7 @@ export function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
           {compactModelName(data.process.agent_model)}
         </span>
         <span className="node-effort">{data.process.agent_effort || "medium"}</span>
-        <StatusPill status={latest?.status} />
+        <StatusPill status={latest?.status ?? "not_started"} />
       </div>
       <div className="node-skills" title={skills.map((skill) => skill.skill_name).join(", ") || "No skills"}>
         {skillLabel}
@@ -83,7 +85,7 @@ export function ProcessFlowNode({ data }: { data: ProcessNodeData }) {
 export function ArtifactFlowNode({ data }: { data: ArtifactNodeData }) {
   return (
     <div
-      className={`flow-node artifact-node ${data.selected ? "selected" : ""}`}
+      className={`flow-node artifact-node node-state-${data.state} ${data.selected ? "selected" : ""}`}
       onClick={() => data.onSelect(data.artifact.id)}
     >
       <Handle id="produces" type="target" position={Position.Left} />
@@ -95,6 +97,7 @@ export function ArtifactFlowNode({ data }: { data: ArtifactNodeData }) {
       <div className="node-meta">
         <span>{data.artifact.type}</span>
         <span>{data.producerName ?? "source"}</span>
+        <StatusPill status={data.state} />
       </div>
       <div className="node-stats">
         <span>{data.consumerCount} consumers</span>

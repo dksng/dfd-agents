@@ -13,6 +13,16 @@ type UseFlowGraphArgs = {
   workflow: Workflow | null;
 };
 
+function sourceArtifactReady(artifact: Workflow["artifacts"][number]): boolean {
+  if (artifact.type === "file") {
+    return Boolean(artifact.source_file_path);
+  }
+  if (artifact.type === "url") {
+    return Boolean(artifact.source_url);
+  }
+  return Boolean(artifact.source_text);
+}
+
 export function useFlowGraph({
   fitView,
   onRunProcess,
@@ -40,6 +50,7 @@ export function useFlowGraph({
       }
     }
     const processNameById = new Map((workflow?.processes ?? []).map((process) => [process.id, process.name]));
+    const processById = new Map((workflow?.processes ?? []).map((process) => [process.id, process]));
     return [
       ...(workflow?.processes ?? []).map((process) => ({
         id: process.id,
@@ -50,12 +61,19 @@ export function useFlowGraph({
           selected: process.id === selectedProcessId,
           inputCount: inputCountByProcess.get(process.id) ?? 0,
           outputCount: outputCountByProcess.get(process.id) ?? 0,
+          state: process.runs?.[0]?.status ?? "not_started",
           onSelect: onSelectProcess,
           onRun: (id: string) => onRunProcess(id)
         }
       })),
       ...(workflow?.artifacts ?? []).map((artifact) => {
         const producerId = producerByArtifact.get(artifact.id);
+        const producer = producerId ? processById.get(producerId) : undefined;
+        const state = producer
+          ? (producer.runs?.[0]?.status ?? "not_started")
+          : sourceArtifactReady(artifact)
+            ? "source_ready"
+            : "source_missing";
         return {
           id: artifact.id,
           type: "artifact",
@@ -64,6 +82,7 @@ export function useFlowGraph({
             artifact,
             selected: artifact.id === selectedArtifactId,
             producerName: producerId ? processNameById.get(producerId) : undefined,
+            state,
             consumerCount: consumersByArtifact.get(artifact.id) ?? 0,
             onSelect: onSelectArtifact
           }
