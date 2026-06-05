@@ -42,13 +42,12 @@ export function Topbar({
         className={`icon-button ${notifyEnabled ? "active" : ""}`}
         title={
           !notifySupported
-            ? "Notifications not supported by this browser"
+            ? "Desktop notifications are unavailable; app toasts will be used"
             : notifyEnabled
               ? "Disable desktop notifications"
               : "Enable desktop notifications (QA / review / failures)"
         }
         onClick={onToggleNotify}
-        disabled={!notifySupported}
       >
         {notifyEnabled ? <Bell size={16} /> : <BellOff size={16} />}
       </button>

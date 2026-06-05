@@ -7,6 +7,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_NOTIFY_EVENTS = ["waiting_qa", "in_review", "failed"]
+VALID_NOTIFY_EVENTS = {"waiting_qa", "in_review", "failed", "approved", "rejected"}
 
 
 def _split_env_list(value: str | None) -> list[str]:
@@ -23,6 +25,24 @@ def _int_env(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_notify_events(items: list[str] | None) -> list[str]:
+    if not items:
+        return list(DEFAULT_NOTIFY_EVENTS)
+    events: list[str] = []
+    for item in items:
+        event = str(item).strip()
+        if event in VALID_NOTIFY_EVENTS and event not in events:
+            events.append(event)
+    return events or list(DEFAULT_NOTIFY_EVENTS)
 
 
 class Settings(BaseModel):
@@ -54,6 +74,10 @@ class Settings(BaseModel):
         )
     )
     default_disallowed_tools: str = Field(default_factory=lambda: os.getenv("ORCH_DEFAULT_DISALLOWED_TOOLS", ""))
+    notify_events: list[str] = Field(
+        default_factory=lambda: normalize_notify_events(_split_env_list(os.getenv("ORCH_NOTIFY_EVENTS")))
+    )
+    notify_enabled: bool = Field(default_factory=lambda: _bool_env("ORCH_NOTIFY_ENABLED", False))
 
     @property
     def db_path(self) -> Path:
@@ -92,10 +116,20 @@ class Settings(BaseModel):
         skill_repos = data.get("skill_repos")
         if isinstance(skill_repos, list):
             self.skill_repos = [str(item).strip() for item in skill_repos if str(item).strip()]
+        notify_events = data.get("notify_events")
+        if isinstance(notify_events, list):
+            self.notify_events = normalize_notify_events([str(item) for item in notify_events])
+        notify_enabled = data.get("notify_enabled")
+        if isinstance(notify_enabled, bool):
+            self.notify_enabled = notify_enabled
 
     def save_runtime_settings(self) -> None:
         self.config_root.mkdir(parents=True, exist_ok=True)
-        payload = {"skill_repos": self.skill_repos}
+        payload = {
+            "skill_repos": self.skill_repos,
+            "notify_events": normalize_notify_events(self.notify_events),
+            "notify_enabled": self.notify_enabled,
+        }
         self.runtime_settings_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

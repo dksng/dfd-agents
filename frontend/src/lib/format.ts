@@ -6,15 +6,6 @@ export function compactModelName(model: string): string {
     .replace("-haiku-", "-h-");
 }
 
-export function simpleLineDiff(before: string, after: string): string {
-  if (before === after) {
-    return "No changes.";
-  }
-  const beforeLines = before.split(/\r?\n/);
-  const afterLines = after.split(/\r?\n/);
-  return [...beforeLines.map((line) => `- ${line}`), ...afterLines.map((line) => `+ ${line}`)].join("\n");
-}
-
 export function sourceFileName(path: string | null | undefined): string {
   if (!path) {
     return "";

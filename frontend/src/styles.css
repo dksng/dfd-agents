@@ -213,6 +213,44 @@ button:disabled {
   color: #7c2d12;
 }
 
+.toast-stack {
+  position: absolute;
+  z-index: 12;
+  top: 66px;
+  right: 16px;
+  display: grid;
+  gap: 8px;
+  width: min(380px, calc(100vw - 32px));
+}
+
+.notification-toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #bfd2e8;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(23, 32, 42, 0.18);
+}
+
+.toast-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #17202a;
+  text-align: left;
+}
+
+.toast-main span {
+  color: #52606d;
+  font-size: 12px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 270px 1fr 390px;
@@ -876,26 +914,21 @@ textarea {
   font-size: 12px;
 }
 
-.diff-controls {
+.version-controls {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
   gap: 8px;
   align-items: center;
 }
 
-.diff-view {
-  max-height: 220px;
-  overflow: auto;
-  margin: 10px 0 0;
-  padding: 10px;
-  border: 1px solid #d7dde3;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #17202a;
-  font-family: "SFMono-Regular", Consolas, monospace;
+.version-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+  color: #66788a;
   font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
+  font-weight: 700;
 }
 
 .empty-panel {

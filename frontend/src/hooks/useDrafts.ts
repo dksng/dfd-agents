@@ -16,7 +16,6 @@ type UseDraftsArgs = {
   selectedProcess: ProcessNode | null;
   selectedProcessId: string;
   setError: (message: string) => void;
-  setRunDiffPair: (baseId: string, targetId: string) => void;
   setSelectedRun: Dispatch<SetStateAction<RunDetail | null>>;
   workflow: Workflow | null;
   workflowIdRef: MutableRefObject<string | null>;
@@ -31,7 +30,6 @@ export function useDrafts({
   selectedProcess,
   selectedProcessId,
   setError,
-  setRunDiffPair,
   setSelectedRun,
   workflow,
   workflowIdRef
@@ -67,7 +65,6 @@ export function useDrafts({
     draft.goal_md = normalizeGoalForDisplay(draft.goal_md, connectedArtifacts);
     setProcessDraft(draft);
     savedProcessRef.current = JSON.stringify(processPayload(draft, connectedArtifacts));
-    setRunDiffPair(selectedProcess.runs?.[1]?.id ?? "", selectedProcess.runs?.[0]?.id ?? "");
     api
       .getAgentsBase(selectedProcess.template_id || "base")
       .then((res) => setAgentsBase(res.content))

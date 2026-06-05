@@ -33,6 +33,8 @@ class SkillSelection(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     skill_repos: list[str] | None = None
+    notify_events: list[str] | None = None
+    notify_enabled: bool | None = None
 
 
 class ProcessCreate(BaseModel):

@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { artifactContent } from "../lib/artifactContent";
-import { simpleLineDiff } from "../lib/format";
-import type { ArtifactNode, RunDetail, Workflow } from "../types";
+import type { RunDetail, RunSummary, Workflow } from "../types";
 
 type UseRunReviewArgs = {
-  artifactById: Map<string, ArtifactNode>;
   loadWorkflow: (id: string) => Promise<Workflow>;
+  processRuns: RunSummary[];
   selectedRun: RunDetail | null;
   setError: (message: string) => void;
   setSelectedRun: (run: RunDetail | null) => void;
@@ -14,8 +12,8 @@ type UseRunReviewArgs = {
 };
 
 export function useRunReview({
-  artifactById,
   loadWorkflow,
+  processRuns,
   selectedRun,
   setError,
   setSelectedRun,
@@ -24,10 +22,9 @@ export function useRunReview({
   const [feedback, setFeedback] = useState("");
   const [qaAnswer, setQaAnswer] = useState("");
   const [reviewExpanded, setReviewExpanded] = useState(true);
-  const [diffBaseId, setDiffBaseId] = useState("");
-  const [diffTargetId, setDiffTargetId] = useState("");
-  const [diffText, setDiffText] = useState("");
-  const [diffLoading, setDiffLoading] = useState(false);
+  const [versionRunId, setVersionRunId] = useState("");
+  const [versionRun, setVersionRun] = useState<RunDetail | null>(null);
+  const [versionLoading, setVersionLoading] = useState(false);
   const reviewAutoCollapseKeyRef = useRef("");
 
   const selectedRunId = selectedRun?.id;
@@ -48,6 +45,45 @@ export function useRunReview({
     reviewAutoCollapseKeyRef.current = key;
     setReviewExpanded(selectedRunStatus !== "approved");
   }, [selectedRunId, selectedRunStatus]);
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      setVersionRunId("");
+      setVersionRun(null);
+      return;
+    }
+    const candidates = processRuns.filter((run) => run.id !== selectedRunId);
+    setVersionRunId((current) => (candidates.some((run) => run.id === current) ? current : (candidates[0]?.id ?? "")));
+  }, [processRuns, selectedRunId]);
+
+  useEffect(() => {
+    if (!versionRunId) {
+      setVersionRun(null);
+      return;
+    }
+    let cancelled = false;
+    setVersionLoading(true);
+    void api
+      .getRun(versionRunId)
+      .then((run) => {
+        if (!cancelled) {
+          setVersionRun(run);
+        }
+      })
+      .catch((exc) => {
+        if (!cancelled) {
+          setError(String(exc));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setVersionLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setError, versionRunId]);
 
   const answerQA = useCallback(async () => {
     if (!selectedRun || !pendingQA || !qaAnswer.trim()) {
@@ -85,61 +121,21 @@ export function useRunReview({
     }
   }, [feedback, loadWorkflow, selectedRun, setSelectedRun, workflowId]);
 
-  const setRunDiffPair = useCallback((baseId: string, targetId: string) => {
-    setDiffBaseId(baseId);
-    setDiffTargetId(targetId);
-    setDiffText("");
-  }, []);
-
-  const loadRunDiff = useCallback(async () => {
-    if (!diffBaseId || !diffTargetId || diffBaseId === diffTargetId) {
-      setDiffText("");
-      return;
-    }
-    setDiffLoading(true);
-    try {
-      const [base, target] = await Promise.all([api.getRun(diffBaseId), api.getRun(diffTargetId)]);
-      const artifactIds = Array.from(
-        new Set([
-          ...base.artifacts.map((artifact) => artifact.artifact_id),
-          ...target.artifacts.map((artifact) => artifact.artifact_id)
-        ])
-      );
-      const sections: string[] = [];
-      for (const artifactId of artifactIds) {
-        const beforeArtifact = base.artifacts.find((artifact) => artifact.artifact_id === artifactId);
-        const afterArtifact = target.artifacts.find((artifact) => artifact.artifact_id === artifactId);
-        const before = beforeArtifact ? await artifactContent(base, beforeArtifact) : "";
-        const after = afterArtifact ? await artifactContent(target, afterArtifact) : "";
-        sections.push(`## ${artifactById.get(artifactId)?.name ?? artifactId}\n${simpleLineDiff(before, after)}`);
-      }
-      setDiffText(sections.join("\n\n"));
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      setDiffLoading(false);
-    }
-  }, [artifactById, diffBaseId, diffTargetId, setError]);
-
   return {
     answerQA,
     currentReview,
-    diffBaseId,
-    diffLoading,
-    diffTargetId,
-    diffText,
     feedback,
-    loadRunDiff,
     pendingQA,
     qaAnswer,
     resumeSelectedRun,
     reviewExpanded,
     reviewRun,
-    setDiffBaseId,
-    setDiffTargetId,
     setFeedback,
     setQaAnswer,
-    setRunDiffPair,
-    setReviewExpanded
+    setReviewExpanded,
+    setVersionRunId,
+    versionLoading,
+    versionRun,
+    versionRunId
   };
 }

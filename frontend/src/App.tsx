@@ -136,26 +136,22 @@ export function App() {
   const {
     answerQA,
     currentReview,
-    diffBaseId,
-    diffLoading,
-    diffTargetId,
-    diffText,
     feedback,
-    loadRunDiff,
     pendingQA,
     qaAnswer,
     resumeSelectedRun,
     reviewExpanded,
     reviewRun,
-    setDiffBaseId,
-    setDiffTargetId,
     setFeedback,
     setQaAnswer,
     setReviewExpanded,
-    setRunDiffPair
+    setVersionRunId,
+    versionLoading,
+    versionRun,
+    versionRunId
   } = useRunReview({
-    artifactById,
     loadWorkflow,
+    processRuns: selectedProcess?.runs ?? [],
     selectedRun,
     setError,
     setSelectedRun,
@@ -183,7 +179,6 @@ export function App() {
     selectedProcess,
     selectedProcessId,
     setError,
-    setRunDiffPair,
     setSelectedRun,
     workflow,
     workflowIdRef
@@ -334,7 +329,13 @@ export function App() {
   );
 
   const notifySupported = typeof window !== "undefined" && "Notification" in window;
-  const { enabled: notifyEnabled, toggle: toggleNotify, attentionFor } = useNotifications({
+  const {
+    enabled: notifyEnabled,
+    toggle: toggleNotify,
+    attentionFor,
+    toasts: notificationToasts,
+    dismissToast: dismissNotificationToast
+  } = useNotifications({
     resolveLabel: resolveNotificationLabel,
     currentRunId: selectedRun?.id,
     onOpen: openNotificationTarget
@@ -382,6 +383,28 @@ export function App() {
           <button className="icon-button" onClick={() => setError("")}>
             <X size={14} />
           </button>
+        </div>
+      )}
+
+      {notificationToasts.length > 0 && (
+        <div className="toast-stack" role="status" aria-live="polite">
+          {notificationToasts.map((toast) => (
+            <div className="notification-toast" key={toast.id}>
+              <button
+                className="toast-main"
+                onClick={() => {
+                  dismissNotificationToast(toast.id);
+                  openNotificationTarget({ workflowId: toast.workflowId, runId: toast.runId });
+                }}
+              >
+                <strong>{toast.title}</strong>
+                <span>{toast.body}</span>
+              </button>
+              <button className="icon-button" title="Dismiss" onClick={() => dismissNotificationToast(toast.id)}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
@@ -471,19 +494,16 @@ export function App() {
               artifactById={artifactById}
               qaAnswer={qaAnswer}
               feedback={feedback}
-              diffBaseId={diffBaseId}
-              diffTargetId={diffTargetId}
-              diffText={diffText}
-              diffLoading={diffLoading}
+              versionRunId={versionRunId}
+              versionRun={versionRun}
+              versionLoading={versionLoading}
               onToggleExpanded={() => setReviewExpanded((value) => !value)}
               onResumeRun={() => void resumeSelectedRun()}
               onQaAnswerChange={setQaAnswer}
               onAnswerQA={() => void answerQA()}
               onFeedbackChange={setFeedback}
               onReview={(action) => void reviewRun(action)}
-              onDiffBaseChange={setDiffBaseId}
-              onDiffTargetChange={setDiffTargetId}
-              onLoadDiff={() => void loadRunDiff()}
+              onVersionRunChange={setVersionRunId}
             />
 
             <ProcessInspector

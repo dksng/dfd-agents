@@ -15,6 +15,8 @@ export interface AppSettings {
   skill_repos: string[];
   config_root: string;
   skill_cache_root: string;
+  notify_events: string[];
+  notify_enabled: boolean;
 }
 
 export const PERMISSION_MODES = ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"] as const;

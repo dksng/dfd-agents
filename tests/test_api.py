@@ -254,8 +254,17 @@ def test_runtime_settings_update_skill_repos_persists_and_lists_skills(tmp_path:
     )
 
     with make_client(tmp_path) as client:
-        updated = client.put("/api/settings", json={"skill_repos": [str(repo)]}).json()
+        updated = client.put(
+            "/api/settings",
+            json={
+                "skill_repos": [str(repo)],
+                "notify_enabled": True,
+                "notify_events": ["waiting_qa", "failed", "unknown"],
+            },
+        ).json()
         assert updated["skill_repos"] == [str(repo)]
+        assert updated["notify_enabled"] is True
+        assert updated["notify_events"] == ["waiting_qa", "failed"]
         listed = client.get("/api/skills").json()
         assert listed["errors"] == []
         assert [item["name"] for item in listed["skills"]] == ["custom-skill"]
@@ -269,6 +278,8 @@ def test_runtime_settings_update_skill_repos_persists_and_lists_skills(tmp_path:
     with TestClient(create_app(settings)) as client:
         saved = client.get("/api/settings").json()
         assert saved["skill_repos"] == [str(repo)]
+        assert saved["notify_enabled"] is True
+        assert saved["notify_events"] == ["waiting_qa", "failed"]
 
 
 def test_skill_description_uses_frontmatter_description(tmp_path: Path) -> None:

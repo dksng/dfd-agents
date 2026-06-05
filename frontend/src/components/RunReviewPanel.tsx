@@ -1,7 +1,7 @@
-import { ChevronDown, ChevronRight, Check, MessageSquare, Play, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, MessageSquare, Play, X } from "lucide-react";
 import { artifactDownloadUrl } from "../api";
 import { formatCost } from "../lib/format";
-import type { ArtifactNode, CostSummary, QAItem, ReviewItem, RunDetail, RunSummary } from "../types";
+import type { ArtifactNode, ArtifactValue, CostSummary, QAItem, ReviewItem, RunDetail, RunSummary } from "../types";
 import { StatusPill } from "./StatusPill";
 
 type RunReviewPanelProps = {
@@ -14,20 +14,58 @@ type RunReviewPanelProps = {
   artifactById: Map<string, ArtifactNode>;
   qaAnswer: string;
   feedback: string;
-  diffBaseId: string;
-  diffTargetId: string;
-  diffText: string;
-  diffLoading: boolean;
+  versionRunId: string;
+  versionRun: RunDetail | null;
+  versionLoading: boolean;
   onToggleExpanded: () => void;
   onResumeRun: () => void;
   onQaAnswerChange: (value: string) => void;
   onAnswerQA: () => void;
   onFeedbackChange: (value: string) => void;
   onReview: (action: "approve" | "reject") => void;
-  onDiffBaseChange: (runId: string) => void;
-  onDiffTargetChange: (runId: string) => void;
-  onLoadDiff: () => void;
+  onVersionRunChange: (runId: string) => void;
 };
+
+function runOptionLabel(run: RunSummary | RunDetail): string {
+  return `${run.id.slice(0, 12)} (${run.status})`;
+}
+
+function ArtifactRows({
+  artifacts,
+  artifactById,
+  runId
+}: {
+  artifacts: ArtifactValue[];
+  artifactById: Map<string, ArtifactNode>;
+  runId: string;
+}) {
+  if (artifacts.length === 0) {
+    return <div className="muted-line">No artifacts submitted.</div>;
+  }
+  return (
+    <div className="artifact-list">
+      {artifacts.map((artifact) => {
+        const label = artifactById.get(artifact.artifact_id)?.name ?? artifact.artifact_id.slice(0, 12);
+        return (
+          <div key={artifact.id} className="artifact-row">
+            <span>{label}</span>
+            {artifact.artifact_type === "file" && (
+              <a href={artifactDownloadUrl(runId, artifact.artifact_id)} target="_blank" rel="noreferrer">
+                {artifact.file_path}
+              </a>
+            )}
+            {artifact.artifact_type === "url" && (
+              <a href={artifact.url ?? ""} target="_blank" rel="noreferrer">
+                {artifact.url}
+              </a>
+            )}
+            {artifact.artifact_type === "text" && <textarea readOnly value={artifact.text_value ?? ""} rows={3} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function RunReviewPanel({
   selectedRun,
@@ -39,23 +77,21 @@ export function RunReviewPanel({
   artifactById,
   qaAnswer,
   feedback,
-  diffBaseId,
-  diffTargetId,
-  diffText,
-  diffLoading,
+  versionRunId,
+  versionRun,
+  versionLoading,
   onToggleExpanded,
   onResumeRun,
   onQaAnswerChange,
   onAnswerQA,
   onFeedbackChange,
   onReview,
-  onDiffBaseChange,
-  onDiffTargetChange,
-  onLoadDiff
+  onVersionRunChange
 }: RunReviewPanelProps) {
   if (!selectedRun) {
     return null;
   }
+  const versionOptions = processRuns.filter((run) => run.id !== selectedRun.id);
 
   return (
     <div className="review-panel embedded-review">
@@ -78,6 +114,12 @@ export function RunReviewPanel({
         <span>{usage.output_tokens} out</span>
         <strong>{formatCost(usage.cost_usd)}</strong>
       </div>
+
+      <div className="panel-title compact">
+        <strong>Artifacts</strong>
+        <span className="muted-line">{selectedRun.artifacts.length}</span>
+      </div>
+      <ArtifactRows artifacts={selectedRun.artifacts} artifactById={artifactById} runId={selectedRun.id} />
 
       {reviewExpanded && (
         <>
@@ -127,62 +169,39 @@ export function RunReviewPanel({
             </button>
           </div>
 
-          <div className="panel-title compact">
-            <strong>Version Diff</strong>
-          </div>
-          <div className="diff-controls">
-            <select value={diffBaseId} onChange={(event) => onDiffBaseChange(event.target.value)}>
-              <option value="">Base run</option>
-              {processRuns.map((run) => (
-                <option key={run.id} value={run.id}>
-                  {run.id.slice(0, 12)} ({run.status})
-                </option>
-              ))}
-            </select>
-            <select value={diffTargetId} onChange={(event) => onDiffTargetChange(event.target.value)}>
-              <option value="">Target run</option>
-              {processRuns.map((run) => (
-                <option key={run.id} value={run.id}>
-                  {run.id.slice(0, 12)} ({run.status})
-                </option>
-              ))}
-            </select>
-            <button className="icon-text" onClick={onLoadDiff} disabled={diffLoading}>
-              <RefreshCw size={15} />
-              Diff
-            </button>
-          </div>
-          {diffText && <pre className="diff-view">{diffText}</pre>}
-        </>
-      )}
-
-      <div className="panel-title compact">
-        <strong>Artifacts</strong>
-        <span className="muted-line">{selectedRun.artifacts.length}</span>
-      </div>
-      {selectedRun.artifacts.length === 0 && <div className="muted-line">No artifacts submitted.</div>}
-      {selectedRun.artifacts.length > 0 && (
-        <div className="artifact-list">
-          {selectedRun.artifacts.map((artifact) => {
-            const label = artifactById.get(artifact.artifact_id)?.name ?? artifact.artifact_id.slice(0, 12);
-            return (
-              <div key={artifact.id} className="artifact-row">
-                <span>{label}</span>
-                {artifact.artifact_type === "file" && (
-                  <a href={artifactDownloadUrl(selectedRun.id, artifact.artifact_id)} target="_blank" rel="noreferrer">
-                    {artifact.file_path}
-                  </a>
-                )}
-                {artifact.artifact_type === "url" && (
-                  <a href={artifact.url ?? ""} target="_blank" rel="noreferrer">
-                    {artifact.url}
-                  </a>
-                )}
-                {artifact.artifact_type === "text" && <textarea readOnly value={artifact.text_value ?? ""} rows={3} />}
+          {versionOptions.length > 0 && (
+            <>
+              <div className="panel-title compact">
+                <strong>Old Version</strong>
               </div>
-            );
-          })}
-        </div>
+              <div className="version-controls">
+                <select value={versionRunId} onChange={(event) => onVersionRunChange(event.target.value)}>
+                  <option value="">Select old run</option>
+                  {versionOptions.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {runOptionLabel(run)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {versionLoading && <div className="muted-line">Loading old version...</div>}
+              {versionRun && (
+                <>
+                  <div className="version-meta">
+                    <span>{versionRun.id.slice(0, 12)}</span>
+                    <StatusPill status={versionRun.status} />
+                    <span>{new Date(versionRun.started_at).toLocaleString()}</span>
+                  </div>
+                  <ArtifactRows
+                    artifacts={versionRun.artifacts}
+                    artifactById={artifactById}
+                    runId={versionRun.id}
+                  />
+                </>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );
