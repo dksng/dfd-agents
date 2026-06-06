@@ -88,9 +88,12 @@ class EdgeRepository:
 
         return any(visit(process) for process in list(adjacency))
 
-    def delete_edge(self, edge_id: str) -> None:
+    def delete_edge(self, edge_id: str) -> str | None:
+        """Delete an edge and return its workflow_id (for change broadcasting)."""
         with self.connect() as conn:
+            edge = self._fetchone(conn, "SELECT workflow_id FROM edge WHERE id = ?", (edge_id,))
             conn.execute("DELETE FROM edge WHERE id = ?", (edge_id,))
+        return edge["workflow_id"] if edge else None
 
     def get_edges_for_process(self, process_id: str, kind: str | None = None) -> list[dict[str, Any]]:
         process = self.get_process(process_id)

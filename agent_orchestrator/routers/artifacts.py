@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from agent_orchestrator.config import Settings
 from agent_orchestrator.db import Store
-from agent_orchestrator.deps import get_settings, get_store
+from agent_orchestrator.deps import get_client_id, get_hub, get_settings, get_store
+from agent_orchestrator.events import EventHub
 from agent_orchestrator.models import ArtifactCreate, ArtifactUpdate
 from agent_orchestrator.workspace import safe_name
 
@@ -14,21 +15,44 @@ router = APIRouter(prefix="/api")
 
 
 @router.post("/workflows/{workflow_id}/artifacts")
-def create_artifact(workflow_id: str, payload: ArtifactCreate, store: Store = Depends(get_store)) -> dict:
-    return store.create_artifact(workflow_id, payload.model_dump())
+async def create_artifact(
+    workflow_id: str,
+    payload: ArtifactCreate,
+    store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
+) -> dict:
+    artifact = store.create_artifact(workflow_id, payload.model_dump())
+    await hub.publish_graph(workflow_id, "artifact.create", {"artifact_id": artifact["id"]}, origin=client_id)
+    return artifact
 
 
 @router.put("/artifacts/{artifact_id}")
-def update_artifact(artifact_id: str, payload: ArtifactUpdate, store: Store = Depends(get_store)) -> dict:
-    return store.update_artifact(
+async def update_artifact(
+    artifact_id: str,
+    payload: ArtifactUpdate,
+    store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
+) -> dict:
+    artifact = store.update_artifact(
         artifact_id,
         payload.model_dump(exclude_unset=True),
     )
+    await hub.publish_graph(artifact["workflow_id"], "artifact.update", {"artifact_id": artifact_id}, origin=client_id)
+    return artifact
 
 
 @router.delete("/artifacts/{artifact_id}")
-def delete_artifact(artifact_id: str, store: Store = Depends(get_store)) -> dict[str, bool]:
+async def delete_artifact(
+    artifact_id: str,
+    store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
+) -> dict[str, bool]:
+    artifact = store.get_artifact(artifact_id)
     store.delete_artifact(artifact_id)
+    await hub.publish_graph(artifact["workflow_id"], "artifact.delete", {"artifact_id": artifact_id}, origin=client_id)
     return {"ok": True}
 
 
@@ -39,6 +63,8 @@ async def upload_artifact_source_file(
     filename: str = Query(..., min_length=1),
     store: Store = Depends(get_store),
     settings: Settings = Depends(get_settings),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
 ) -> dict:
     artifact = store.get_artifact(artifact_id)
     if artifact["type"] != "file":
@@ -50,4 +76,6 @@ async def upload_artifact_source_file(
     upload_dir.mkdir(parents=True, exist_ok=True)
     target = upload_dir / clean_filename
     target.write_bytes(await request.body())
-    return store.update_artifact(artifact_id, {"source_file_path": str(target)})
+    updated = store.update_artifact(artifact_id, {"source_file_path": str(target)})
+    await hub.publish_graph(updated["workflow_id"], "artifact.update", {"artifact_id": artifact_id}, origin=client_id)
+    return updated

@@ -185,5 +185,9 @@ export interface GlobalEvent {
   run_id: string;
   process_id: string;
   workflow_id: string;
+  /** For type==="graph": the structural change, e.g. "process.create", "edge.delete". */
+  action?: string;
+  /** Id of the client that made the change (so it can ignore its own echo). */
+  origin?: string;
   payload: Record<string, unknown>;
 }

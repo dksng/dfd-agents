@@ -11,6 +11,12 @@ from .execution import ExecutionEngine
 from .skills import SkillRegistry
 
 
+def get_client_id(request: Request) -> str:
+    """Identify the client that issued a mutation so graph-change broadcasts can be
+    tagged with their origin and the originating client can ignore its own echo."""
+    return request.headers.get("x-orch-client", "")
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 

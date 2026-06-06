@@ -826,6 +826,24 @@ def test_attention_summary_reflects_latest_run_state(tmp_path: Path) -> None:
         assert client.get("/api/attention").json() == []
 
 
+def test_graph_changes_broadcast_on_global_events(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "sync"}).json()
+        with client.websocket_connect("/ws/events") as ws:
+            # A structural change made by another client is broadcast with its origin.
+            client.post(
+                f"/api/workflows/{workflow['id']}/processes",
+                json={"name": "Impl", "type": "implement"},
+                headers={"x-orch-client": "agent-1"},
+            )
+            event = ws.receive_json()
+            assert event["type"] == "graph"
+            assert event["action"] == "process.create"
+            assert event["workflow_id"] == workflow["id"]
+            assert event["origin"] == "agent-1"
+            assert "process_id" in event["payload"]
+
+
 def test_qa_answer_flow(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "qa"}).json()

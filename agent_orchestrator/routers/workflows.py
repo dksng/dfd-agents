@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 
 from agent_orchestrator.config import Settings
 from agent_orchestrator.db import Store
-from agent_orchestrator.deps import get_settings, get_store
+from agent_orchestrator.deps import get_client_id, get_hub, get_settings, get_store
+from agent_orchestrator.events import EventHub
 from agent_orchestrator.models import WorkflowCreate, WorkflowImport, WorkflowUpdate
 from agent_orchestrator.workspace import safe_name
 
@@ -21,8 +22,15 @@ def list_workflows(store: Store = Depends(get_store)) -> list[dict]:
 
 
 @router.post("/workflows")
-def create_workflow(payload: WorkflowCreate, store: Store = Depends(get_store)) -> dict:
-    return store.create_workflow(payload.name)
+async def create_workflow(
+    payload: WorkflowCreate,
+    store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
+) -> dict:
+    workflow = store.create_workflow(payload.name)
+    await hub.publish_graph(workflow["id"], "workflow.create", origin=client_id)
+    return workflow
 
 
 @router.get("/workflows/{workflow_id}")
@@ -31,16 +39,20 @@ def get_workflow(workflow_id: str, store: Store = Depends(get_store)) -> dict:
 
 
 @router.put("/workflows/{workflow_id}")
-def update_workflow(
+async def update_workflow(
     workflow_id: str,
     payload: WorkflowUpdate,
     store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
 ) -> dict:
-    return store.update_workflow(
+    workflow = store.update_workflow(
         workflow_id,
         name=payload.name,
         layout_json=payload.layout_json,
     )
+    await hub.publish_graph(workflow_id, "workflow.update", origin=client_id)
+    return workflow
 
 
 @router.get("/workflows/{workflow_id}/export")
@@ -57,18 +69,28 @@ def export_workflow(workflow_id: str, store: Store = Depends(get_store)) -> JSON
 
 
 @router.post("/workflows/import")
-def import_workflow(payload: WorkflowImport, store: Store = Depends(get_store)) -> dict:
-    return store.import_workflow(payload.document, payload.name)
+async def import_workflow(
+    payload: WorkflowImport,
+    store: Store = Depends(get_store),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
+) -> dict:
+    workflow = store.import_workflow(payload.document, payload.name)
+    await hub.publish_graph(workflow["id"], "workflow.import", origin=client_id)
+    return workflow
 
 
 @router.delete("/workflows/{workflow_id}")
-def delete_workflow(
+async def delete_workflow(
     workflow_id: str,
     store: Store = Depends(get_store),
     settings: Settings = Depends(get_settings),
+    hub: EventHub = Depends(get_hub),
+    client_id: str = Depends(get_client_id),
 ) -> dict[str, bool]:
     store.delete_workflow(workflow_id)
     shutil.rmtree(settings.workflow_root / workflow_id, ignore_errors=True)
+    await hub.publish_graph(workflow_id, "workflow.delete", origin=client_id)
     return {"ok": True}
 
 

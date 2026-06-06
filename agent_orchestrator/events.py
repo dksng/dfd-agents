@@ -43,3 +43,30 @@ class EventHub:
             except RuntimeError:
                 await self.disconnect(run_id, websocket)
                 await self.disconnect_global(websocket)
+
+    async def publish_graph(
+        self,
+        workflow_id: str,
+        action: str,
+        payload: dict[str, Any] | None = None,
+        origin: str = "",
+    ) -> None:
+        """Broadcast a graph (structure/config) change so other clients — the human
+        GUI or an AI agent — can live-refresh the affected workflow. Not tied to a run.
+        ``origin`` carries the id of the client that made the change so it can ignore
+        its own echo. Best-effort: a delivery failure must never break the API call."""
+        try:
+            await self.publish(
+                "",
+                {
+                    "type": "graph",
+                    "action": action,
+                    "workflow_id": workflow_id,
+                    "run_id": "",
+                    "process_id": "",
+                    "origin": origin,
+                    "payload": payload or {},
+                },
+            )
+        except Exception:  # noqa: BLE001 - graph sync is advisory only
+            pass

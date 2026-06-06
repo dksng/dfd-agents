@@ -13,11 +13,19 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
+// Stable per-tab id so graph-change broadcasts can be tagged with their origin
+// and this client can ignore the echo of its own mutations (no self-reload loop).
+export const CLIENT_ID =
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `c-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
+      "x-orch-client": CLIENT_ID,
       ...(init.headers ?? {})
     }
   });
@@ -88,7 +96,7 @@ export const api = {
       `${API_BASE}/api/artifacts/${id}/source-file?filename=${encodeURIComponent(file.name)}`,
       {
         method: "POST",
-        headers: { "content-type": "application/octet-stream" },
+        headers: { "content-type": "application/octet-stream", "x-orch-client": CLIENT_ID },
         body: file
       }
     );

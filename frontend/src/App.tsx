@@ -24,6 +24,7 @@ import { useRunStream } from "./hooks/useRunStream";
 import { useSelectedWorkflowItems } from "./hooks/useSelectedWorkflowItems";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkflowActions } from "./hooks/useWorkflowActions";
+import { useWorkflowSync } from "./hooks/useWorkflowSync";
 import { useWorkflowName } from "./hooks/useWorkflowName";
 import type { RunDetail, Workflow } from "./types";
 
@@ -70,6 +71,22 @@ export function App() {
     onClearSelection: clearWorkflowSelection,
     onWorkflowLoaded: selectLoadedWorkflow,
     setError
+  });
+
+  // Live-sync: reflect graph changes made by another client (a second tab or an AI
+  // agent driving the REST API) on this canvas without a manual reload.
+  const refreshWorkflowList = useCallback(() => {
+    void api
+      .listWorkflows()
+      .then(setWorkflows)
+      .catch(() => {
+        /* transient; the list refreshes again on the next event */
+      });
+  }, [setWorkflows]);
+  useWorkflowSync({
+    workflowId: workflow?.id,
+    onGraphChange: refreshWorkflow,
+    onListChange: refreshWorkflowList
   });
 
   const centerFlowItem = useCallback(
