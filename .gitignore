@@ -6,4 +6,4 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
-
+scripts/orch.env

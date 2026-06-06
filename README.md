@@ -2,6 +2,28 @@
 
 `docs/SPEC.md` に基づく、ローカル単一ユーザ向けの工程オーケストレーションMVPです。
 
+## Quick Start
+
+```bash
+scripts/orch.sh setup
+scripts/orch.sh start
+```
+
+`start` はバックエンドをバックグラウンド常駐で起動し、ビルド済みUIを同一ポートで配信します。
+既定のURLは `http://127.0.0.1:8000` です。
+
+よく使う管理コマンド:
+
+```bash
+scripts/orch.sh status
+scripts/orch.sh logs -f
+scripts/orch.sh stop
+scripts/orch.sh doctor
+```
+
+Node.js が古い/無い環境では、ユーザ空間に Node を入れる場合だけ `setup --auto-deps` を使います。
+詳細は [docs/setup-script.md](docs/setup-script.md) を参照してください。
+
 ## Backend
 
 ```bash
