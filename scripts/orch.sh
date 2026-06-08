@@ -25,6 +25,7 @@ FORCE=0
 AUTO_DEPS=0
 PURGE_DATA=0
 PORT_OVERRIDDEN=0
+PYTHON_BIN="${ORCH_PYTHON_BIN:-}"
 
 usage() {
   cat <<'EOF'
@@ -43,6 +44,10 @@ Commands:
   update                       git pull --ff-only, setup, restart.
   clean|uninstall [--purge-data]
                                Remove local dependencies/build output; data only with confirmation.
+
+Environment:
+  ORCH_PYTHON_BIN=/path/to/python3.12
+                               Use a specific Python 3.11+ interpreter.
 EOF
 }
 
@@ -58,6 +63,51 @@ die() {
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 ensure_state_dir() { mkdir -p "$STATE_DIR"; }
+
+python_supports_project() {
+  local candidate="$1"
+  [[ -n "$candidate" ]] || return 1
+  command_exists "$candidate" || return 1
+  "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+}
+
+select_python() {
+  local preferred="${ORCH_PYTHON_BIN:-}"
+  if [[ -n "$preferred" ]]; then
+    PYTHON_BIN="$preferred"
+    python_supports_project "$PYTHON_BIN"
+    return
+  fi
+  if [[ -n "$PYTHON_BIN" ]]; then
+    python_supports_project "$PYTHON_BIN" && return
+    PYTHON_BIN=""
+  fi
+  local candidate
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+    if python_supports_project "$candidate"; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      return 0
+    fi
+  done
+  return 1
+}
+
+die_python_missing() {
+  if [[ -n "${ORCH_PYTHON_BIN:-}" ]]; then
+    err "ORCH_PYTHON_BIN must point to Python 3.11 or newer: ${ORCH_PYTHON_BIN}"
+  else
+    err "Python 3.11+ is required, but no usable interpreter was found."
+    err "Install Python 3.11 or newer and retry. If it is installed under a custom name, set ORCH_PYTHON_BIN=/path/to/python."
+  fi
+  exit 1
+}
+
+require_python() {
+  select_python || die_python_missing
+}
 
 load_env() {
   if [[ -f "$ENV_FILE" ]]; then
@@ -80,10 +130,7 @@ apply_meta_network() {
 }
 
 python_ok() {
-  command_exists python3 && python3 - <<'PY' >/dev/null 2>&1
-import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
-PY
+  select_python
 }
 
 node_ok() {
@@ -103,7 +150,8 @@ full_head_commit() {
 }
 
 generate_token() {
-  python3 - <<'PY'
+  require_python
+  "$PYTHON_BIN" - <<'PY'
 import secrets
 print("orch_" + secrets.token_urlsafe(32))
 PY
@@ -131,7 +179,8 @@ dev_url() {
 
 http_get() {
   local url="$1"
-  python3 - "$url" <<'PY'
+  require_python
+  "$PYTHON_BIN" - "$url" <<'PY'
 import sys
 import urllib.request
 
@@ -151,7 +200,8 @@ health_ok() {
 json_value() {
   local key="$1"
   [[ -f "$META_FILE" ]] || return 1
-  python3 - "$META_FILE" "$key" <<'PY'
+  require_python
+  "$PYTHON_BIN" - "$META_FILE" "$key" <<'PY'
 import json
 import sys
 
@@ -177,7 +227,8 @@ record_meta() {
   local url="$2"
   local mode="$3"
   local vite_pid="${4:-}"
-  python3 - "$META_FILE" "$pid" "$HOST" "$PORT" "$url" "$ROOT_DIR" "$(full_head_commit)" "$mode" "$vite_pid" <<'PY'
+  require_python
+  "$PYTHON_BIN" - "$META_FILE" "$pid" "$HOST" "$PORT" "$url" "$ROOT_DIR" "$(full_head_commit)" "$mode" "$vite_pid" <<'PY'
 import datetime as dt
 import json
 import sys
@@ -203,7 +254,8 @@ PY
 
 mark_stopped() {
   [[ -f "$META_FILE" ]] || return 0
-  python3 - "$META_FILE" <<'PY' >/dev/null 2>&1 || true
+  require_python
+  "$PYTHON_BIN" - "$META_FILE" <<'PY' >/dev/null 2>&1 || true
 import datetime as dt
 import json
 import sys
@@ -262,7 +314,8 @@ port_in_use() {
   elif command_exists netstat; then
     netstat -an | grep -Eq "[.:]$port .*LISTEN"
   else
-    python3 - "$HOST" "$port" <<'PY' >/dev/null 2>&1
+    require_python
+    "$PYTHON_BIN" - "$HOST" "$port" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
@@ -319,9 +372,7 @@ install_node_auto() {
 }
 
 ensure_prereqs() {
-  if ! python_ok; then
-    die "Python 3.11+ is required. Install Python 3.11 or newer and retry." 1
-  fi
+  require_python
   load_node_manager || true
   if ! node_ok; then
     if [[ "$AUTO_DEPS" -eq 1 ]]; then
@@ -337,9 +388,9 @@ install_backend() {
   if [[ ! -x "$VENV_DIR/bin/python" || ! -x "$VENV_DIR/bin/pip" ]]; then
     rm -rf "$VENV_DIR"
     info "Creating Python virtual environment"
-    if ! python3 -m venv "$VENV_DIR"; then
+    if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
       rm -rf "$VENV_DIR"
-      die "Failed to create .venv. On Debian/Ubuntu install python3-venv (for example: sudo apt install python3.12-venv) and rerun setup." 1
+      die "Failed to create .venv. On Debian/Ubuntu install the matching venv package (for example: sudo apt install python3.12-venv) and rerun setup." 1
     fi
   fi
   info "Installing Python dependencies"
@@ -551,7 +602,8 @@ active_attention_warning() {
   local body
   body="$(http_get "$(api_base)/api/attention" 2>/dev/null || true)"
   [[ -n "$body" ]] || return 0
-  python3 - "$body" <<'PY'
+  require_python
+  "$PYTHON_BIN" - "$body" <<'PY'
 import json
 import sys
 try:
@@ -631,7 +683,8 @@ cmd_restart() {
 
 format_uptime() {
   local started="$1"
-  python3 - "$started" <<'PY'
+  require_python
+  "$PYTHON_BIN" - "$started" <<'PY'
 import datetime as dt
 import sys
 try:
@@ -665,7 +718,8 @@ cmd_status() {
   mode="$(json_value mode 2>/dev/null || true)"
   uptime="$(format_uptime "$started")"
   health="$(http_get "$(api_base)/api/health" 2>/dev/null || true)"
-  adapter="$(python3 - "$health" <<'PY' 2>/dev/null || true
+  require_python
+  adapter="$("$PYTHON_BIN" - "$health" <<'PY' 2>/dev/null || true
 import json, sys
 try:
     print(json.loads(sys.argv[1]).get("active_adapter", "unknown"))
@@ -712,11 +766,23 @@ doctor_line() {
 
 cmd_doctor() {
   load_env
-  local py node_v port_status browser tool
-  py="$(python3 --version 2>/dev/null || printf 'missing')"
+  local py py_status node_v port_status browser tool
+  if select_python; then
+    py="$("$PYTHON_BIN" --version 2>&1) ($PYTHON_BIN)"
+    py_status="OK"
+  else
+    py="missing suitable Python 3.11+"
+    py_status="NEEDS 3.11+"
+    if [[ -n "${ORCH_PYTHON_BIN:-}" ]]; then
+      py="invalid ORCH_PYTHON_BIN=${ORCH_PYTHON_BIN}"
+    elif command_exists python3; then
+      py="$py; python3 is $(python3 --version 2>&1)"
+    fi
+  fi
   node_v="$(node --version 2>/dev/null || printf 'missing')"
   local ensurepip_status
-  ensurepip_status="$(python3 - <<'PY' 2>/dev/null || true
+  if [[ "$py_status" == "OK" ]]; then
+    ensurepip_status="$("$PYTHON_BIN" - <<'PY' 2>/dev/null || true
 try:
     import ensurepip  # noqa: F401
 except Exception:
@@ -725,6 +791,9 @@ else:
     print("present")
 PY
 )"
+  else
+    ensurepip_status="missing"
+  fi
   if port_in_use "$PORT"; then port_status="in use"; else port_status="free"; fi
   if [[ "$(uname -s)" == "Darwin" && $(command_exists open; echo $?) -eq 0 ]]; then
     browser="open"
@@ -741,7 +810,7 @@ PY
   fi
   doctor_line "repo" "$ROOT_DIR"
   doctor_line "state dir" "$STATE_DIR"
-  doctor_line "python" "$py $(python_ok && printf OK || printf 'NEEDS 3.11+')"
+  doctor_line "python" "$py $py_status"
   doctor_line "python ensurepip" "${ensurepip_status:-missing}"
   doctor_line "node" "$node_v $(node_ok && printf OK || printf 'NEEDS 20.19+/22.12+')"
   doctor_line "git" "$(command -v git 2>/dev/null || printf missing)"
