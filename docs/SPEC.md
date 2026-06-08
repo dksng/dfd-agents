@@ -339,18 +339,20 @@ running ─(失敗)→ failed
 - **料金テーブルは設定ファイル `pricing.yaml`** にモデル別単価（input / output / cache_read / cache_write_5m / cache_write_1h、USD/1Mトークン等）を記載。バックエンドが起動時に読み込み、コスト換算してリアルタイム表示。
   ```yaml
   # pricing.yaml 例
-	  currency: USD
-	  default_model: claude-opus-4-8
-	  models:
-	    claude-opus-4-8:
-	      enabled: true
-	      label: Claude Opus 4.8
-	      input: 5.0           # per 1M tokens
-	      output: 25.0
-	      cache_read: 0.5
-	      cache_write_5m: 6.25
-	      cache_write_1h: 10.0
-	  ```
+  cost_source: pricing
+  currency: USD
+  default_model: claude-opus-4-8
+  models:
+    claude-opus-4-8:
+      enabled: true
+      label: Claude Opus 4.8
+      input: 5.0           # per 1M tokens
+      output: 25.0
+      cache_read: 0.5
+      cache_write_5m: 6.25
+      cache_write_1h: 10.0
+  ```
+- `cost_source: pricing` では `pricing.yaml` を正としてコスト換算する。`cost_source: result_total_cost` の場合のみ、Claude Code の result イベントが返す `total_cost_usd` で完了 Run の合計額を補正する。
 - **Run 単位**および **Workflow 全体**での累積トークン・コストを可視化。
 
 ### 8.9 成果物の版管理（Run単位）

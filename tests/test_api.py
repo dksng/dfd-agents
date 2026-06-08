@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -454,7 +455,7 @@ def test_delete_workflow_rejects_active_runs_and_removes_workdir(tmp_path: Path)
         assert client.get(f"/api/workflows/{workflow['id']}").status_code == 404
 
 
-def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> None:
+def test_claude_usage_counts_assistant_messages_once_and_parses_result_usage() -> None:
     adapter = ClaudeCodeAdapter(["claude"])
     seen: set[str] = set()
     assistant = adapter._parse_event(
@@ -528,7 +529,143 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
     assert assistant["session_id"] == "session_1"
     assert adapter._usage_for_event(duplicate, seen) is None
     assert adapter._usage_for_event(result, seen) is None
+    assert adapter._final_usage_for_event(result) == {
+        "input_tokens": 100,
+        "output_tokens": 30,
+        "cache_read": 50,
+        "cache_write": 20,
+        "cache_write_5m": 12,
+        "cache_write_1h": 8,
+    }
     assert adapter._final_cost_for_event(result) == 0.123
+
+
+def test_final_usage_reconciles_tokens_without_result_cost_override(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "usage totals"}).json()
+        process = create_process(client, workflow["id"], "Worker")
+        run = client.app.state.store.create_run(
+            process["id"],
+            status="running",
+            workdir_path=str(tmp_path / "run"),
+        )
+        engine = client.app.state.engine
+        observed_usage = {
+            "input_tokens": 10,
+            "output_tokens": 3,
+            "cache_read": 5,
+            "cache_write": 2,
+            "cache_write_5m": 1,
+            "cache_write_1h": 1,
+        }
+        final_usage = {
+            "input_tokens": 100,
+            "output_tokens": 30,
+            "cache_read": 50,
+            "cache_write": 20,
+            "cache_write_5m": 12,
+            "cache_write_1h": 8,
+        }
+
+        asyncio.run(
+            engine.record_usage(
+                run["id"],
+                process,
+                **observed_usage,
+            )
+        )
+        asyncio.run(
+            engine.record_final_usage(
+                run["id"],
+                process,
+                final_usage,
+                observed_usage=observed_usage,
+            )
+        )
+        pricing_cost = engine.pricing.cost(
+            process["agent_model"],
+            **final_usage,
+        )
+        asyncio.run(engine.record_final_cost(run["id"], process, 0.000001))
+
+        summary = client.get(f"/api/runs/{run['id']}/cost").json()
+        assert summary["input_tokens"] == final_usage["input_tokens"]
+        assert summary["output_tokens"] == final_usage["output_tokens"]
+        assert summary["cache_read"] == final_usage["cache_read"]
+        assert summary["cache_write"] == final_usage["cache_write"]
+        assert summary["cache_write_5m"] == final_usage["cache_write_5m"]
+        assert summary["cache_write_1h"] == final_usage["cache_write_1h"]
+        assert abs(summary["cost_usd"] - pricing_cost) < 0.000000001
+
+
+def test_final_usage_reconciles_multiple_result_segments(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "usage segments"}).json()
+        process = create_process(client, workflow["id"], "Worker")
+        run = client.app.state.store.create_run(
+            process["id"],
+            status="running",
+            workdir_path=str(tmp_path / "run"),
+        )
+        engine = client.app.state.engine
+        segments = [
+            (
+                {
+                    "input_tokens": 10,
+                    "output_tokens": 3,
+                    "cache_read": 5,
+                    "cache_write": 2,
+                    "cache_write_5m": 1,
+                    "cache_write_1h": 1,
+                },
+                {
+                    "input_tokens": 10,
+                    "output_tokens": 30,
+                    "cache_read": 5,
+                    "cache_write": 2,
+                    "cache_write_5m": 1,
+                    "cache_write_1h": 1,
+                },
+            ),
+            (
+                {
+                    "input_tokens": 2,
+                    "output_tokens": 1,
+                    "cache_read": 8,
+                    "cache_write": 4,
+                    "cache_write_5m": 4,
+                    "cache_write_1h": 0,
+                },
+                {
+                    "input_tokens": 2,
+                    "output_tokens": 20,
+                    "cache_read": 8,
+                    "cache_write": 4,
+                    "cache_write_5m": 4,
+                    "cache_write_1h": 0,
+                },
+            ),
+        ]
+
+        expected = {key: 0 for key in segments[0][1]}
+        for observed_usage, final_usage in segments:
+            asyncio.run(engine.record_usage(run["id"], process, **observed_usage))
+            asyncio.run(
+                engine.record_final_usage(
+                    run["id"],
+                    process,
+                    final_usage,
+                    observed_usage=observed_usage,
+                )
+            )
+            for key, value in final_usage.items():
+                expected[key] += value
+
+        pricing_cost = engine.pricing.cost(process["agent_model"], **expected)
+        summary = client.get(f"/api/runs/{run['id']}/cost").json()
+        for key, value in expected.items():
+            assert summary[key] == value
+        assert abs(summary["cost_usd"] - pricing_cost) < 0.000000001
 
 
 def test_workflow_run_review_and_cost(tmp_path: Path) -> None:

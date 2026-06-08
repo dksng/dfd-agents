@@ -63,6 +63,13 @@ def usage_for_event(parsed: dict[str, Any], seen_message_ids: set[str]) -> dict[
     return usage if any(usage.values()) else None
 
 
+def final_usage_for_event(parsed: dict[str, Any]) -> dict[str, int] | None:
+    if parsed.get("event_type") != "result" or not parsed.get("usage"):
+        return None
+    usage = normalize_usage(parsed["usage"])
+    return usage if any(usage.values()) else None
+
+
 def final_cost_for_event(parsed: dict[str, Any]) -> float | None:
     if parsed.get("event_type") != "result" or parsed.get("total_cost_usd") is None:
         return None

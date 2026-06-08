@@ -271,7 +271,30 @@ class ExecutionEngine:
         )
         await self._publish(run_id, "usage", usage)
 
+    async def record_final_usage(
+        self,
+        run_id: str,
+        process: dict[str, Any],
+        final_usage: dict[str, int],
+        *,
+        observed_usage: dict[str, int] | None = None,
+    ) -> None:
+        observed = observed_usage or {}
+        deltas = {
+            "input_tokens": int(final_usage.get("input_tokens", 0)) - int(observed.get("input_tokens") or 0),
+            "output_tokens": int(final_usage.get("output_tokens", 0)) - int(observed.get("output_tokens") or 0),
+            "cache_read": int(final_usage.get("cache_read", 0)) - int(observed.get("cache_read") or 0),
+            "cache_write": int(final_usage.get("cache_write", 0)) - int(observed.get("cache_write") or 0),
+            "cache_write_5m": int(final_usage.get("cache_write_5m", 0)) - int(observed.get("cache_write_5m") or 0),
+            "cache_write_1h": int(final_usage.get("cache_write_1h", 0)) - int(observed.get("cache_write_1h") or 0),
+        }
+        if not any(deltas.values()):
+            return
+        await self.record_usage(run_id, process, **deltas)
+
     async def record_final_cost(self, run_id: str, process: dict[str, Any], total_cost_usd: float) -> None:
+        if not self.pricing.use_result_total_cost():
+            return
         current_cost = float(self.store.run_cost(run_id).get("cost_usd") or 0)
         adjustment = total_cost_usd - current_cost
         if abs(adjustment) < 0.000000001:

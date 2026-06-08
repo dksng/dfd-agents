@@ -46,6 +46,7 @@ Model choices and token pricing are loaded from `pricing.yaml` under `ORCH_CONFI
 (`.orch/config/pricing.yaml` by default). Rates are USD per 1M tokens.
 
 ```yaml
+cost_source: pricing
 currency: USD
 default_model: claude-sonnet-4-6
 models:
@@ -58,6 +59,10 @@ models:
     cache_write_5m: 3.75
     cache_write_1h: 6.0
 ```
+
+`cost_source: pricing` keeps displayed cost based on this file. Set
+`cost_source: result_total_cost` only when Claude Code's `total_cost_usd` should
+override local pricing for completed runs.
 
 ## Frontend
 

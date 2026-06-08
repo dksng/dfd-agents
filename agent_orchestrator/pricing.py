@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 DEFAULT_PRICING = {
+    "cost_source": "pricing",
     "currency": "USD",
     "default_model": "claude-sonnet-4-6",
     "models": {
@@ -123,6 +124,9 @@ class Pricing:
 
     def default_model(self) -> str:
         return str(self.model_catalog()["default_model"])
+
+    def use_result_total_cost(self) -> bool:
+        return str(self.table.get("cost_source") or "pricing") == "result_total_cost"
 
     def cost(
         self,

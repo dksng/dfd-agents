@@ -186,8 +186,6 @@ def main() -> int:
         ok = run["status"] == "in_review" and artifact_text == expected
         if args.with_qa:
             ok = ok and summary["qa_answered"]
-        if result_cost is not None:
-            ok = ok and abs(cost - result_cost) < 0.000000001
         return 0 if ok else 1
     finally:
         server.terminate()

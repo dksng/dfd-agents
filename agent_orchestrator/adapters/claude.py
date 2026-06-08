@@ -5,7 +5,13 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from agent_orchestrator.claude_command import apply_permissions, command_for_process, permission_setting, split_tools
-from agent_orchestrator.claude_stream import final_cost_for_event, normalize_usage, parse_event, usage_for_event
+from agent_orchestrator.claude_stream import (
+    final_cost_for_event,
+    final_usage_for_event,
+    normalize_usage,
+    parse_event,
+    usage_for_event,
+)
 from agent_orchestrator.config import Settings
 
 from .base import AgentAdapter, AgentResult
@@ -60,6 +66,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             session_id = run.get("session_id")
             persisted_session_id = session_id
             seen_message_ids: set[str] = set()
+            observed_usage = self._empty_usage()
             async for raw_line in process_handle.stdout:
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if not line:
@@ -82,6 +89,11 @@ class ClaudeCodeAdapter(AgentAdapter):
                         cache_write_5m=usage["cache_write_5m"],
                         cache_write_1h=usage["cache_write_1h"],
                     )
+                    self._add_usage(observed_usage, usage)
+                final_usage = self._final_usage_for_event(parsed)
+                if final_usage:
+                    await engine.record_final_usage(run["id"], process, final_usage, observed_usage=observed_usage)
+                    observed_usage = self._empty_usage()
                 final_cost = self._final_cost_for_event(parsed)
                 if final_cost is not None:
                     await engine.record_final_cost(run["id"], process, final_cost)
@@ -111,6 +123,23 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def _usage_for_event(self, parsed: dict[str, Any], seen_message_ids: set[str]) -> dict[str, int] | None:
         return usage_for_event(parsed, seen_message_ids)
+
+    def _empty_usage(self) -> dict[str, int]:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read": 0,
+            "cache_write": 0,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+        }
+
+    def _add_usage(self, total: dict[str, int], usage: dict[str, int]) -> None:
+        for key in total:
+            total[key] += int(usage.get(key, 0))
+
+    def _final_usage_for_event(self, parsed: dict[str, Any]) -> dict[str, int] | None:
+        return final_usage_for_event(parsed)
 
     def _final_cost_for_event(self, parsed: dict[str, Any]) -> float | None:
         return final_cost_for_event(parsed)
