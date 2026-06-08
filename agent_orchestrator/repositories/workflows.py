@@ -119,7 +119,7 @@ class WorkflowRepository:
         workflow = self.get_workflow(workflow_id)
         return {
             "format_version": 1,
-            "tool": "agent-process-orchestrator",
+            "tool": "dfd-agents",
             "exported_at": now_iso(),
             "workflow": {
                 "name": workflow["name"],

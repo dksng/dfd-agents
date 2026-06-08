@@ -28,7 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     workspace = WorkspaceBuilder(settings, store, skills)
     engine = ExecutionEngine(settings, store, hub, pricing, workspace)
 
-    app = FastAPI(title="Agent Process Orchestrator")
+    app = FastAPI(title="DFD-Agents")
     app.state.settings = settings
     app.state.store = store
     app.state.hub = hub

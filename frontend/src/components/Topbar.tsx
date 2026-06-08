@@ -27,7 +27,7 @@ export function Topbar({
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark">DFD</span>
-        <strong>Agent Process Orchestrator</strong>
+        <strong>DFD-Agents</strong>
       </div>
       <input
         className="workflow-name"

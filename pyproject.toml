@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-process-orchestrator"
+name = "dfd-agents"
 version = "0.1.0"
-description = "Local DFD-style process orchestrator for AI coding agents."
+description = "Local DFD-style workflow workbench for AI coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -23,6 +23,7 @@ dev = [
 ]
 
 [project.scripts]
+dfd-agents = "agent_orchestrator.cli:main"
 agent-orch = "agent_orchestrator.cli:main"
 
 [tool.setuptools.packages.find]

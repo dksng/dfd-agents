@@ -1,4 +1,4 @@
-# Agent Process Orchestrator
+# DFD-Agents
 
 `docs/SPEC.md` に基づく、ローカル単一ユーザ向けの工程オーケストレーションMVPです。
 

@@ -1,12 +1,12 @@
 ---
 name: orchestrator-api
-description: "Use this skill when an agent needs to build or operate a workflow inside this DFD agent-process orchestrator over its REST API instead of the GUI — creating workflows, adding process/artifact nodes and produces/consumes edges, configuring a process's goal/model/effort/permissions/skills, running a process, watching run progress over WebSocket, answering its QA, and approving/rejecting/resuming runs. Triggers include requests to 'build a workflow via the API', 'have the agent design the DFD', 'drive the orchestrator headless', or any programmatic create/run/review against the orchestrator backend (default http://127.0.0.1:8002). Not for editing the React GUI itself."
+description: "Use this skill when an agent needs to build or operate a workflow inside DFD-Agents over its REST API instead of the GUI — creating workflows, adding process/artifact nodes and produces/consumes edges, configuring a process's goal/model/effort/permissions/skills, running a process, watching run progress over WebSocket, answering its QA, and approving/rejecting/resuming runs. Triggers include requests to 'build a workflow via the API', 'have the agent design the DFD', 'drive DFD-Agents headless', or any programmatic create/run/review against the DFD-Agents backend (default http://127.0.0.1:8002). Not for editing the React GUI itself."
 license: MIT
 ---
 
-# Orchestrator API
+# DFD-Agents API
 
-Drive this DFD agent-process orchestrator programmatically. The backend (FastAPI) is the
+Drive DFD-Agents programmatically. The backend (FastAPI) is the
 single source of truth; the human React GUI is just one client. Every change you make over
 the REST API is broadcast over a WebSocket, so the human's canvas updates **live** — you and
 a person can co-edit the same workflow.

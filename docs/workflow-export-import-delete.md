@@ -40,7 +40,7 @@
 ```json
 {
   "format_version": 1,
-  "tool": "agent-process-orchestrator",
+  "tool": "dfd-agents",
   "exported_at": "2026-06-04T00:00:00Z",
   "workflow": {
     "name": "詳細設計フロー",

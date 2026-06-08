@@ -1,4 +1,4 @@
-# 工程オーケストレーションツール 仕様書
+# DFD-Agents 仕様書
 
 > 本書は `req.md` を仕様書として整理したものです。確定済みの設計判断と、未確定の論点を明示します。
 > ステータス: 確定 v1.0 / 最終更新: 2026-06-02
@@ -379,7 +379,7 @@ running ─(失敗)→ failed
 ```json
 {
   "format_version": 1,
-  "tool": "agent-process-orchestrator",
+  "tool": "dfd-agents",
   "exported_at": "2026-06-04T00:00:00Z",
   "workflow": { "name": "...", "layout_json": {} },
   "processes": [
