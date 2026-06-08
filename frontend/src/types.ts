@@ -25,7 +25,8 @@ export interface ModelOption {
   input: number;
   output: number;
   cache_read: number;
-  cache_write: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
 }
 
 export interface ModelCatalog {
@@ -119,6 +120,8 @@ export interface RunSummary {
   output_tokens: number;
   cache_read: number;
   cache_write: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
   cost_usd: number;
 }
 
@@ -139,6 +142,8 @@ export interface TokenUsage {
   output_tokens: number;
   cache_read: number;
   cache_write: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
   cost_usd: number;
   model: string;
 }
@@ -185,6 +190,8 @@ export interface CostSummary {
   output_tokens: number;
   cache_read: number;
   cache_write: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
   cost_usd: number;
 }
 

@@ -107,9 +107,10 @@ def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cache_read=1_000_000,
-        cache_write=1_000_000,
+        cache_write_5m=1_000_000,
+        cache_write_1h=1_000_000,
     )
-    assert cost == 110.25
+    assert cost == 46.75
 
 
 def test_model_catalog_and_process_default_come_from_pricing_yaml(tmp_path: Path) -> None:
@@ -127,7 +128,8 @@ def test_model_catalog_and_process_default_come_from_pricing_yaml(tmp_path: Path
                         "input": 2.0,
                         "output": 10.0,
                         "cache_read": 0.2,
-                        "cache_write": 2.5,
+                        "cache_write_5m": 2.5,
+                        "cache_write_1h": 4.0,
                     },
                     "disabled-model": {
                         "enabled": False,
@@ -158,7 +160,8 @@ def test_model_catalog_and_process_default_come_from_pricing_yaml(tmp_path: Path
             "input": 2.0,
             "output": 10.0,
             "cache_read": 0.2,
-            "cache_write": 2.5,
+            "cache_write_5m": 2.5,
+            "cache_write_1h": 4.0,
         }
     ]
 
@@ -465,6 +468,10 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
                         "output_tokens": 3,
                         "cache_read_input_tokens": 5,
                         "cache_creation_input_tokens": 2,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 1,
+                            "ephemeral_1h_input_tokens": 1,
+                        },
                     },
                 },
                 "session_id": "session_1",
@@ -482,6 +489,10 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
                         "output_tokens": 3,
                         "cache_read_input_tokens": 5,
                         "cache_creation_input_tokens": 2,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 1,
+                            "ephemeral_1h_input_tokens": 1,
+                        },
                     },
                 },
             }
@@ -496,6 +507,10 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
                     "output_tokens": 30,
                     "cache_read_input_tokens": 50,
                     "cache_creation_input_tokens": 20,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 12,
+                        "ephemeral_1h_input_tokens": 8,
+                    },
                 },
                 "total_cost_usd": 0.123,
             }
@@ -507,6 +522,8 @@ def test_claude_usage_counts_assistant_messages_once_and_uses_result_cost() -> N
         "output_tokens": 3,
         "cache_read": 5,
         "cache_write": 2,
+        "cache_write_5m": 1,
+        "cache_write_1h": 1,
     }
     assert assistant["session_id"] == "session_1"
     assert adapter._usage_for_event(duplicate, seen) is None
@@ -540,13 +557,19 @@ def test_workflow_run_review_and_cost(tmp_path: Path) -> None:
         cost = client.get(f"/api/workflows/{workflow['id']}/cost").json()
         assert cost["input_tokens"] == 1200
         assert cost["output_tokens"] == 450
+        assert cost["cache_write_5m"] == 0
+        assert cost["cache_write_1h"] == 0
         assert cost["cost_usd"] > 0
         run_detail = client.get(f"/api/runs/{run['id']}").json()
         assert run_detail["cost_usd"] == cost["cost_usd"]
+        assert run_detail["cache_write_5m"] == 0
+        assert run_detail["cache_write_1h"] == 0
         full_workflow = client.get(f"/api/workflows/{workflow['id']}").json()
         run_summary = full_workflow["processes"][0]["runs"][0]
         assert run_summary["input_tokens"] == 1200
         assert run_summary["output_tokens"] == 450
+        assert run_summary["cache_write_5m"] == 0
+        assert run_summary["cache_write_1h"] == 0
         assert run_summary["cost_usd"] == cost["cost_usd"]
 
         reviewed = client.post(f"/api/runs/{run['id']}/review", json={"action": "approve"}).json()

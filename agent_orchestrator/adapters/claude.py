@@ -79,6 +79,8 @@ class ClaudeCodeAdapter(AgentAdapter):
                         output_tokens=usage["output_tokens"],
                         cache_read=usage["cache_read"],
                         cache_write=usage["cache_write"],
+                        cache_write_5m=usage["cache_write_5m"],
+                        cache_write_1h=usage["cache_write_1h"],
                     )
                 final_cost = self._final_cost_for_event(parsed)
                 if final_cost is not None:

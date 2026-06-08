@@ -78,6 +78,8 @@ class WorkflowRepository:
                             COALESCE(SUM(output_tokens), 0) AS output_tokens,
                             COALESCE(SUM(cache_read), 0) AS cache_read,
                             COALESCE(SUM(cache_write), 0) AS cache_write,
+                            COALESCE(SUM(cache_write_5m), 0) AS cache_write_5m,
+                            COALESCE(SUM(cache_write_1h), 0) AS cache_write_1h,
                             COALESCE(SUM(cost_usd), 0) AS cost_usd
                         FROM run_token_usage
                         WHERE run_id IN ({run_placeholders})
@@ -94,6 +96,8 @@ class WorkflowRepository:
                     run["output_tokens"] = usage.get("output_tokens", 0)
                     run["cache_read"] = usage.get("cache_read", 0)
                     run["cache_write"] = usage.get("cache_write", 0)
+                    run["cache_write_5m"] = usage.get("cache_write_5m", 0)
+                    run["cache_write_1h"] = usage.get("cache_write_1h", 0)
                     run["cost_usd"] = usage.get("cost_usd", 0)
                     runs.setdefault(run["process_id"], []).append(run)
             artifacts = self._fetchall(
@@ -244,7 +248,7 @@ class WorkflowRepository:
                         process.get("name", "Imported Process"),
                         process.get("type", "implement"),
                         process.get("agent_kind", "claude"),
-                        process.get("agent_model", "claude-sonnet-4-5"),
+                        process.get("agent_model", "claude-sonnet-4-6"),
                         process.get("agent_effort", "medium"),
                         process.get("permission_mode", ""),
                         process.get("allowed_tools", ""),
@@ -348,6 +352,8 @@ class WorkflowRepository:
                     COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
                     COALESCE(SUM(u.cache_read), 0) AS cache_read,
                     COALESCE(SUM(u.cache_write), 0) AS cache_write,
+                    COALESCE(SUM(u.cache_write_5m), 0) AS cache_write_5m,
+                    COALESCE(SUM(u.cache_write_1h), 0) AS cache_write_1h,
                     COALESCE(SUM(u.cost_usd), 0) AS cost_usd
                 FROM run_token_usage u
                 JOIN run r ON r.id = u.run_id

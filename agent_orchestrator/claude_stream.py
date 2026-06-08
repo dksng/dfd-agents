@@ -32,11 +32,21 @@ def parse_event(line: str) -> dict[str, Any]:
 
 
 def normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
+    cache_creation = usage.get("cache_creation")
+    if not isinstance(cache_creation, dict):
+        cache_creation = {}
+    cache_write_5m = int(usage.get("cache_write_5m", cache_creation.get("ephemeral_5m_input_tokens", 0)) or 0)
+    cache_write_1h = int(usage.get("cache_write_1h", cache_creation.get("ephemeral_1h_input_tokens", 0)) or 0)
+    cache_write = int(usage.get("cache_creation_input_tokens", usage.get("cache_write", 0)) or 0)
+    if cache_write == 0:
+        cache_write = cache_write_5m + cache_write_1h
     return {
         "input_tokens": int(usage.get("input_tokens", 0)),
         "output_tokens": int(usage.get("output_tokens", 0)),
         "cache_read": int(usage.get("cache_read_input_tokens", usage.get("cache_read", 0))),
-        "cache_write": int(usage.get("cache_creation_input_tokens", usage.get("cache_write", 0))),
+        "cache_write": cache_write,
+        "cache_write_5m": cache_write_5m,
+        "cache_write_1h": cache_write_1h,
     }
 
 

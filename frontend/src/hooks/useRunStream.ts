@@ -74,7 +74,9 @@ export function useRunStream({
                           input_tokens: (run.input_tokens ?? 0) + usageEvent.input_tokens,
                           output_tokens: (run.output_tokens ?? 0) + usageEvent.output_tokens,
                           cache_read: (run.cache_read ?? 0) + usageEvent.cache_read,
-                          cache_write: (run.cache_write ?? 0) + usageEvent.cache_write,
+                          cache_write: (run.cache_write ?? 0) + (usageEvent.cache_write ?? 0),
+                          cache_write_5m: (run.cache_write_5m ?? 0) + (usageEvent.cache_write_5m ?? 0),
+                          cache_write_1h: (run.cache_write_1h ?? 0) + (usageEvent.cache_write_1h ?? 0),
                           cost_usd: (run.cost_usd ?? 0) + usageEvent.cost_usd
                         }
                       : run
@@ -89,7 +91,9 @@ export function useRunStream({
                 input_tokens: current.input_tokens + usageEvent.input_tokens,
                 output_tokens: current.output_tokens + usageEvent.output_tokens,
                 cache_read: current.cache_read + usageEvent.cache_read,
-                cache_write: current.cache_write + usageEvent.cache_write,
+                cache_write: (current.cache_write ?? 0) + (usageEvent.cache_write ?? 0),
+                cache_write_5m: (current.cache_write_5m ?? 0) + (usageEvent.cache_write_5m ?? 0),
+                cache_write_1h: (current.cache_write_1h ?? 0) + (usageEvent.cache_write_1h ?? 0),
                 cost_usd: current.cost_usd + usageEvent.cost_usd
               }
             : current

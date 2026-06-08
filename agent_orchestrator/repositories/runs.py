@@ -72,6 +72,8 @@ class RunRepository:
                     COALESCE(SUM(output_tokens), 0) AS output_tokens,
                     COALESCE(SUM(cache_read), 0) AS cache_read,
                     COALESCE(SUM(cache_write), 0) AS cache_write,
+                    COALESCE(SUM(cache_write_5m), 0) AS cache_write_5m,
+                    COALESCE(SUM(cache_write_1h), 0) AS cache_write_1h,
                     COALESCE(SUM(cost_usd), 0) AS cost_usd
                 FROM run_token_usage WHERE run_id = ?
                 """,
@@ -161,6 +163,8 @@ class RunRepository:
         output_tokens: int,
         cache_read: int,
         cache_write: int,
+        cache_write_5m: int,
+        cache_write_1h: int,
         cost_usd: float,
         model: str,
     ) -> dict[str, Any]:
@@ -173,6 +177,8 @@ class RunRepository:
             "output_tokens": output_tokens,
             "cache_read": cache_read,
             "cache_write": cache_write,
+            "cache_write_5m": cache_write_5m,
+            "cache_write_1h": cache_write_1h,
             "cost_usd": cost_usd,
             "model": model,
         }
@@ -180,8 +186,9 @@ class RunRepository:
             conn.execute(
                 """
                 INSERT INTO run_token_usage(
-                    id, run_id, ts, input_tokens, output_tokens, cache_read, cache_write, cost_usd, model
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, run_id, ts, input_tokens, output_tokens, cache_read, cache_write,
+                    cache_write_5m, cache_write_1h, cost_usd, model
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 tuple(row.values()),
             )
@@ -318,6 +325,8 @@ class RunRepository:
                     COALESCE(SUM(output_tokens), 0) AS output_tokens,
                     COALESCE(SUM(cache_read), 0) AS cache_read,
                     COALESCE(SUM(cache_write), 0) AS cache_write,
+                    COALESCE(SUM(cache_write_5m), 0) AS cache_write_5m,
+                    COALESCE(SUM(cache_write_1h), 0) AS cache_write_1h,
                     COALESCE(SUM(cost_usd), 0) AS cost_usd
                 FROM run_token_usage WHERE run_id = ?
                 """,

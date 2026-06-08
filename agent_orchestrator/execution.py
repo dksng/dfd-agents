@@ -246,6 +246,8 @@ class ExecutionEngine:
         output_tokens: int = 0,
         cache_read: int = 0,
         cache_write: int = 0,
+        cache_write_5m: int = 0,
+        cache_write_1h: int = 0,
     ) -> None:
         cost = self.pricing.cost(
             process["agent_model"],
@@ -253,6 +255,8 @@ class ExecutionEngine:
             output_tokens=output_tokens,
             cache_read=cache_read,
             cache_write=cache_write,
+            cache_write_5m=cache_write_5m,
+            cache_write_1h=cache_write_1h,
         )
         usage = self.store.add_usage(
             run_id,
@@ -260,6 +264,8 @@ class ExecutionEngine:
             output_tokens=output_tokens,
             cache_read=cache_read,
             cache_write=cache_write,
+            cache_write_5m=cache_write_5m,
+            cache_write_1h=cache_write_1h,
             cost_usd=cost,
             model=process["agent_model"],
         )
@@ -276,6 +282,8 @@ class ExecutionEngine:
             output_tokens=0,
             cache_read=0,
             cache_write=0,
+            cache_write_5m=0,
+            cache_write_1h=0,
             cost_usd=adjustment,
             model=process["agent_model"],
         )

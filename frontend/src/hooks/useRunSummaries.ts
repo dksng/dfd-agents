@@ -8,9 +8,19 @@ function totalUsage(run: RunDetail | null): CostSummary {
       output_tokens: acc.output_tokens + item.output_tokens,
       cache_read: acc.cache_read + item.cache_read,
       cache_write: acc.cache_write + item.cache_write,
+      cache_write_5m: acc.cache_write_5m + (item.cache_write_5m ?? 0),
+      cache_write_1h: acc.cache_write_1h + (item.cache_write_1h ?? 0),
       cost_usd: acc.cost_usd + item.cost_usd
     }),
-    { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_write: 0, cost_usd: 0 }
+    {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read: 0,
+      cache_write: 0,
+      cache_write_5m: 0,
+      cache_write_1h: 0,
+      cost_usd: 0
+    }
   );
 }
 

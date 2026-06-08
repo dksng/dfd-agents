@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS process (
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     agent_kind TEXT NOT NULL DEFAULT 'claude',
-    agent_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+    agent_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
     agent_effort TEXT NOT NULL DEFAULT 'medium',
     permission_mode TEXT NOT NULL DEFAULT '',
     allowed_tools TEXT NOT NULL DEFAULT '',
@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS run_token_usage (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read INTEGER NOT NULL DEFAULT 0,
     cache_write INTEGER NOT NULL DEFAULT 0,
+    cache_write_5m INTEGER NOT NULL DEFAULT 0,
+    cache_write_1h INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL NOT NULL DEFAULT 0,
     model TEXT NOT NULL
 );

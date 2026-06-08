@@ -52,3 +52,7 @@ def apply_additive_migrations(conn: sqlite3.Connection) -> None:
     for column in ("permission_mode", "allowed_tools", "disallowed_tools"):
         if column not in process_columns:
             conn.execute(f"ALTER TABLE process ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    usage_columns = table_columns(conn, "run_token_usage")
+    for column in ("cache_write_5m", "cache_write_1h"):
+        if column not in usage_columns:
+            conn.execute(f"ALTER TABLE run_token_usage ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")

@@ -47,15 +47,16 @@ Model choices and token pricing are loaded from `pricing.yaml` under `ORCH_CONFI
 
 ```yaml
 currency: USD
-default_model: claude-sonnet-4-5
+default_model: claude-sonnet-4-6
 models:
-  claude-sonnet-4-5:
+  claude-sonnet-4-6:
     enabled: true
-    label: Claude Sonnet 4.5
+    label: Claude Sonnet 4.6
     input: 3.0
     output: 15.0
     cache_read: 0.3
-    cache_write: 3.75
+    cache_write_5m: 3.75
+    cache_write_1h: 6.0
 ```
 
 ## Frontend

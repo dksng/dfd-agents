@@ -24,7 +24,7 @@ class Store(WorkflowRepository, ProcessRepository, ArtifactRepository, EdgeRepos
                 reset_schema(conn)
             conn.executescript(SCHEMA)
             apply_additive_migrations(conn)
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
 
     def _fetchone(self, conn: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         row = conn.execute(sql, params).fetchone()

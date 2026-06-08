@@ -181,7 +181,7 @@ run(id, process_id, status,                     -- status: §8.2 参照
     workdir_path)
 
 run_token_usage(id, run_id, ts, input_tokens, output_tokens,
-    cache_read, cache_write, cost_usd, model)
+    cache_read, cache_write, cache_write_5m, cache_write_1h, cost_usd, model)
 
 qa(id, run_id, question_text, answer_text, status, created_at, answered_at)
 
@@ -336,17 +336,21 @@ running ─(失敗)→ failed
 
 ### 8.8 トークン・コスト監視
 - エージェント呼び出し（Run）ごとに使用トークンを SDK イベントから集計。
-- **料金テーブルは設定ファイル `pricing.yaml`** にモデル別単価（input / output / cache_read / cache_write、USD/1Mトークン等）を記載。バックエンドが起動時に読み込み、コスト換算してリアルタイム表示。
+- **料金テーブルは設定ファイル `pricing.yaml`** にモデル別単価（input / output / cache_read / cache_write_5m / cache_write_1h、USD/1Mトークン等）を記載。バックエンドが起動時に読み込み、コスト換算してリアルタイム表示。
   ```yaml
   # pricing.yaml 例
-  currency: USD
-  models:
-    claude-opus-4-8:
-      input: 15.0          # per 1M tokens
-      output: 75.0
-      cache_read: 1.5
-      cache_write: 18.75
-  ```
+	  currency: USD
+	  default_model: claude-opus-4-8
+	  models:
+	    claude-opus-4-8:
+	      enabled: true
+	      label: Claude Opus 4.8
+	      input: 5.0           # per 1M tokens
+	      output: 25.0
+	      cache_read: 0.5
+	      cache_write_5m: 6.25
+	      cache_write_1h: 10.0
+	  ```
 - **Run 単位**および **Workflow 全体**での累積トークン・コストを可視化。
 
 ### 8.9 成果物の版管理（Run単位）

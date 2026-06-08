@@ -32,7 +32,7 @@ class ProcessRepository:
                     workflow_id,
                     data.get("name", "New Process"),
                     data.get("type", "implement"),
-                    data.get("agent_model", "claude-sonnet-4-5"),
+                    data.get("agent_model", "claude-sonnet-4-6"),
                     data.get("pos_x", 120),
                     data.get("pos_y", 120),
                 ),

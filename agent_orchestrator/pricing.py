@@ -7,23 +7,70 @@ import yaml
 
 DEFAULT_PRICING = {
     "currency": "USD",
-    "default_model": "claude-sonnet-4-5",
+    "default_model": "claude-sonnet-4-6",
     "models": {
-        "claude-sonnet-4-5": {
-            "enabled": True,
-            "label": "Claude Sonnet 4.5",
-            "input": 3.0,
-            "output": 15.0,
-            "cache_read": 0.3,
-            "cache_write": 3.75,
-        },
         "claude-opus-4-8": {
             "enabled": True,
             "label": "Claude Opus 4.8",
+            "input": 5.0,
+            "output": 25.0,
+            "cache_read": 0.5,
+            "cache_write_5m": 6.25,
+            "cache_write_1h": 10.0,
+        },
+        "claude-opus-4-7": {
+            "enabled": True,
+            "label": "Claude Opus 4.7",
+            "input": 5.0,
+            "output": 25.0,
+            "cache_read": 0.5,
+            "cache_write_5m": 6.25,
+            "cache_write_1h": 10.0,
+        },
+        "claude-opus-4-6": {
+            "enabled": True,
+            "label": "Claude Opus 4.6",
+            "input": 5.0,
+            "output": 25.0,
+            "cache_read": 0.5,
+            "cache_write_5m": 6.25,
+            "cache_write_1h": 10.0,
+        },
+        "claude-opus-4-5": {
+            "enabled": True,
+            "label": "Claude Opus 4.5",
+            "input": 5.0,
+            "output": 25.0,
+            "cache_read": 0.5,
+            "cache_write_5m": 6.25,
+            "cache_write_1h": 10.0,
+        },
+        "claude-opus-4-1": {
+            "enabled": False,
+            "label": "Claude Opus 4.1 (deprecated)",
             "input": 15.0,
             "output": 75.0,
             "cache_read": 1.5,
-            "cache_write": 18.75,
+            "cache_write_5m": 18.75,
+            "cache_write_1h": 30.0,
+        },
+        "claude-opus-4": {
+            "enabled": False,
+            "label": "Claude Opus 4 (deprecated)",
+            "input": 15.0,
+            "output": 75.0,
+            "cache_read": 1.5,
+            "cache_write_5m": 18.75,
+            "cache_write_1h": 30.0,
+        },
+        "claude-sonnet-4-6": {
+            "enabled": True,
+            "label": "Claude Sonnet 4.6",
+            "input": 3.0,
+            "output": 15.0,
+            "cache_read": 0.3,
+            "cache_write_5m": 3.75,
+            "cache_write_1h": 6.0,
         },
     },
 }
@@ -56,17 +103,18 @@ class Pricing:
                     "input": float(rates.get("input", 0)),
                     "output": float(rates.get("output", 0)),
                     "cache_read": float(rates.get("cache_read", 0)),
-                    "cache_write": float(rates.get("cache_write", 0)),
+                    "cache_write_5m": float(rates.get("cache_write_5m", rates.get("cache_write", 0))),
+                    "cache_write_1h": float(rates.get("cache_write_1h", rates.get("cache_write", 0))),
                 }
             )
         ids = {model["id"] for model in models}
         configured_default = str(self.table.get("default_model") or "")
         if configured_default in ids:
             default_model = configured_default
-        elif "claude-sonnet-4-5" in ids:
-            default_model = "claude-sonnet-4-5"
+        elif "claude-sonnet-4-6" in ids:
+            default_model = "claude-sonnet-4-6"
         else:
-            default_model = models[0]["id"] if models else "claude-sonnet-4-5"
+            default_model = models[0]["id"] if models else "claude-sonnet-4-6"
         return {
             "currency": str(self.table.get("currency") or "USD"),
             "default_model": default_model,
@@ -84,13 +132,21 @@ class Pricing:
         output_tokens: int = 0,
         cache_read: int = 0,
         cache_write: int = 0,
+        cache_write_5m: int = 0,
+        cache_write_1h: int = 0,
     ) -> float:
         rates = self.table.get("models", {}).get(model)
         if not rates:
             return 0.0
+        legacy_cache_write_rate = float(rates.get("cache_write", rates.get("cache_write_5m", 0)))
+        if cache_write_5m or cache_write_1h:
+            cache_write_cost = cache_write_5m * float(rates.get("cache_write_5m", legacy_cache_write_rate))
+            cache_write_cost += cache_write_1h * float(rates.get("cache_write_1h", legacy_cache_write_rate))
+        else:
+            cache_write_cost = cache_write * legacy_cache_write_rate
         return (
             input_tokens * float(rates.get("input", 0))
             + output_tokens * float(rates.get("output", 0))
             + cache_read * float(rates.get("cache_read", 0))
-            + cache_write * float(rates.get("cache_write", 0))
+            + cache_write_cost
         ) / 1_000_000
