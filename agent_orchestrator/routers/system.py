@@ -3,9 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from agent_orchestrator.config import Settings, normalize_notify_events
-from agent_orchestrator.deps import get_engine, get_settings, get_skills
+from agent_orchestrator.deps import get_engine, get_pricing, get_settings, get_skills
 from agent_orchestrator.execution import ExecutionEngine
 from agent_orchestrator.models import AppSettingsUpdate
+from agent_orchestrator.pricing import Pricing
 from agent_orchestrator.skills import SkillRegistry
 
 router = APIRouter(prefix="/api")
@@ -29,6 +30,11 @@ def health(engine: ExecutionEngine = Depends(get_engine)) -> dict:
 @router.get("/settings")
 def get_app_settings(settings: Settings = Depends(get_settings)) -> dict[str, object]:
     return _settings_response(settings)
+
+
+@router.get("/models")
+def list_models(pricing: Pricing = Depends(get_pricing)) -> dict[str, object]:
+    return pricing.model_catalog()
 
 
 @router.put("/settings")

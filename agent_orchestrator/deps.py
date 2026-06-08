@@ -8,6 +8,7 @@ from .config import Settings
 from .db import Store
 from .events import EventHub
 from .execution import ExecutionEngine
+from .pricing import Pricing
 from .skills import SkillRegistry
 
 
@@ -27,6 +28,10 @@ def get_store(request: Request) -> Store:
 
 def get_engine(request: Request) -> ExecutionEngine:
     return request.app.state.engine
+
+
+def get_pricing(request: Request) -> Pricing:
+    return request.app.state.pricing
 
 
 def get_hub(request: Request) -> EventHub:

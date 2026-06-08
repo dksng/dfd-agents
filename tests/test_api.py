@@ -112,6 +112,64 @@ def test_default_pricing_includes_opus_4_8(tmp_path: Path) -> None:
     assert cost == 110.25
 
 
+def test_model_catalog_and_process_default_come_from_pricing_yaml(tmp_path: Path) -> None:
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "pricing.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "currency": "USD",
+                "default_model": "custom-sonnet",
+                "models": {
+                    "custom-sonnet": {
+                        "enabled": True,
+                        "label": "Custom Sonnet",
+                        "input": 2.0,
+                        "output": 10.0,
+                        "cache_read": 0.2,
+                        "cache_write": 2.5,
+                    },
+                    "disabled-model": {
+                        "enabled": False,
+                        "label": "Disabled Model",
+                        "input": 99.0,
+                        "output": 99.0,
+                    },
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        config_root=config_root,
+        data_root=tmp_path / "data",
+        agent_mode="mock",
+        api_base="http://testserver",
+    )
+    client = TestClient(create_app(settings))
+
+    catalog = client.get("/api/models").json()
+    assert catalog["default_model"] == "custom-sonnet"
+    assert catalog["models"] == [
+        {
+            "id": "custom-sonnet",
+            "label": "Custom Sonnet",
+            "input": 2.0,
+            "output": 10.0,
+            "cache_read": 0.2,
+            "cache_write": 2.5,
+        }
+    ]
+
+    workflow = client.post("/api/workflows", json={"name": "pricing defaults"}).json()
+    process = client.post(
+        f"/api/workflows/{workflow['id']}/processes",
+        json={"name": "uses default"},
+    ).json()
+    assert process["agent_model"] == "custom-sonnet"
+
+
 def test_command_includes_model_and_effort() -> None:
     adapter = ClaudeCodeAdapter(["claude", "--print"])
     command = adapter._command_for_process({"agent_model": "claude-opus-4-8", "agent_effort": "high"})

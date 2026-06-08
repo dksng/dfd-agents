@@ -3,10 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from agent_orchestrator.db import Store
-from agent_orchestrator.deps import get_client_id, get_engine, get_hub, get_store
+from agent_orchestrator.deps import get_client_id, get_engine, get_hub, get_pricing, get_store
 from agent_orchestrator.events import EventHub
 from agent_orchestrator.execution import ExecutionEngine
 from agent_orchestrator.models import ProcessConfigUpdate, ProcessCreate
+from agent_orchestrator.pricing import Pricing
 
 router = APIRouter(prefix="/api")
 
@@ -16,10 +17,13 @@ async def create_process(
     workflow_id: str,
     payload: ProcessCreate,
     store: Store = Depends(get_store),
+    pricing: Pricing = Depends(get_pricing),
     hub: EventHub = Depends(get_hub),
     client_id: str = Depends(get_client_id),
 ) -> dict:
-    process = store.create_process(workflow_id, payload.model_dump())
+    data = payload.model_dump()
+    data.setdefault("agent_model", pricing.default_model())
+    process = store.create_process(workflow_id, data)
     await hub.publish_graph(workflow_id, "process.create", {"process_id": process["id"]}, origin=client_id)
     return process
 

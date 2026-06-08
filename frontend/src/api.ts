@@ -4,6 +4,7 @@ import type {
   AttentionSummary,
   CostSummary,
   HealthInfo,
+  ModelCatalog,
   ProcessNode,
   RunDetail,
   SkillCandidate,
@@ -141,6 +142,7 @@ export const api = {
     }),
   workflowCost: (id: string) => request<CostSummary>(`/api/workflows/${id}/cost`),
   getHealth: () => request<HealthInfo>("/api/health"),
+  getModels: () => request<ModelCatalog>("/api/models"),
   getSettings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: Partial<AppSettings>) =>
     request<AppSettings>("/api/settings", {

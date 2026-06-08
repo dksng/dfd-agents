@@ -26,7 +26,7 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkflowActions } from "./hooks/useWorkflowActions";
 import { useWorkflowSync } from "./hooks/useWorkflowSync";
 import { useWorkflowName } from "./hooks/useWorkflowName";
-import type { RunDetail, Workflow } from "./types";
+import type { ModelCatalog, RunDetail, Workflow } from "./types";
 
 export function App() {
   const { fitView, screenToFlowPosition, setCenter } = useReactFlow();
@@ -34,6 +34,7 @@ export function App() {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string>("");
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [expandedRunProcessIds, setExpandedRunProcessIds] = useState<Set<string>>(() => new Set());
   const workflowIdRef = useRef<string | null>(null);
   const explicitRunSelectionRef = useRef("");
@@ -263,6 +264,10 @@ export function App() {
     try {
       await loadInitialWorkflow();
       await loadInitialSkillState();
+      api
+        .getModels()
+        .then(setModelCatalog)
+        .catch((exc) => setError(String(exc)));
       void refreshHealth();
     } catch (exc) {
       setError(String(exc));
@@ -536,6 +541,7 @@ export function App() {
               suggestOpen={suggestOpen}
               goalArtifacts={goalArtifacts}
               agentsBase={agentsBase}
+              modelOptions={modelCatalog?.models ?? []}
               onRun={() => processDraft && void runProcess(processDraft.id)}
               onSave={() => void saveProcess()}
               onDelete={() => void deleteSelectedProcess()}

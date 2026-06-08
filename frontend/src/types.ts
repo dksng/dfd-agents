@@ -19,6 +19,21 @@ export interface AppSettings {
   notify_enabled: boolean;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+export interface ModelCatalog {
+  currency: string;
+  default_model: string;
+  models: ModelOption[];
+}
+
 export const PERMISSION_MODES = ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"] as const;
 
 export interface SkillSelection {

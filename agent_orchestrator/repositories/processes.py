@@ -24,14 +24,15 @@ class ProcessRepository:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO process(id, workflow_id, name, type, pos_x, pos_y)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO process(id, workflow_id, name, type, agent_model, pos_x, pos_y)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     process_id,
                     workflow_id,
                     data.get("name", "New Process"),
                     data.get("type", "implement"),
+                    data.get("agent_model", "claude-sonnet-4-5"),
                     data.get("pos_x", 120),
                     data.get("pos_y", 120),
                 ),

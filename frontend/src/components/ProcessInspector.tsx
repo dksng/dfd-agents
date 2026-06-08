@@ -2,9 +2,8 @@ import { ChevronDown, ChevronRight, Play, Save, Search, Trash2 } from "lucide-re
 import type { RefObject } from "react";
 import { skillKey } from "../lib/skills";
 import { PERMISSION_MODES } from "../types";
-import type { ArtifactNode, HealthInfo, ProcessNode, SkillCandidate } from "../types";
+import type { ArtifactNode, HealthInfo, ModelOption, ProcessNode, SkillCandidate } from "../types";
 
-const MODEL_OPTIONS = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"];
 const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
 
 type ProcessInspectorProps = {
@@ -18,6 +17,7 @@ type ProcessInspectorProps = {
   suggestOpen: boolean;
   goalArtifacts: ArtifactNode[];
   agentsBase: string;
+  modelOptions: ModelOption[];
   onRun: () => void;
   onSave: () => void;
   onDelete: () => void;
@@ -40,6 +40,7 @@ export function ProcessInspector({
   suggestOpen,
   goalArtifacts,
   agentsBase,
+  modelOptions,
   onRun,
   onSave,
   onDelete,
@@ -88,12 +89,12 @@ export function ProcessInspector({
             value={processDraft.agent_model}
             onChange={(event) => onUpdateDraft("agent_model", event.target.value)}
           >
-            {!MODEL_OPTIONS.includes(processDraft.agent_model) && (
+            {!modelOptions.some((model) => model.id === processDraft.agent_model) && (
               <option value={processDraft.agent_model}>{processDraft.agent_model}</option>
             )}
-            {MODEL_OPTIONS.map((model) => (
-              <option key={model} value={model}>
-                {model}
+            {modelOptions.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label}
               </option>
             ))}
           </select>

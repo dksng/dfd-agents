@@ -40,6 +40,24 @@ Environment variables:
 - `ORCH_CLAUDE_COMMAND`: Claude Code command. Defaults to `claude --print --verbose --output-format stream-json`.
 - `ORCH_QA_TIMEOUT_SECONDS`: maximum time `utils/question.py` waits for a UI answer. Defaults to `3600`.
 
+## Models and Pricing
+
+Model choices and token pricing are loaded from `pricing.yaml` under `ORCH_CONFIG_ROOT`
+(`.orch/config/pricing.yaml` by default). Rates are USD per 1M tokens.
+
+```yaml
+currency: USD
+default_model: claude-sonnet-4-5
+models:
+  claude-sonnet-4-5:
+    enabled: true
+    label: Claude Sonnet 4.5
+    input: 3.0
+    output: 15.0
+    cache_read: 0.3
+    cache_write: 3.75
+```
+
 ## Frontend
 
 ```bash

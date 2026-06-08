@@ -33,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.store = store
     app.state.hub = hub
     app.state.engine = engine
+    app.state.pricing = pricing
     app.state.skills = skills
 
     app.add_middleware(
