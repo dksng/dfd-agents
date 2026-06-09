@@ -54,6 +54,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=self._stream_limit_bytes(),
         )
         engine.register_process(run["id"], process_handle)
         assert process_handle.stdin is not None
@@ -102,6 +103,9 @@ class ClaudeCodeAdapter(AgentAdapter):
             if returncode != 0:
                 return AgentResult(ok=False, session_id=session_id, error=f"Claude command exited with {returncode}")
             return AgentResult(ok=True, session_id=session_id)
+        except BaseException:
+            await self._terminate_process(process_handle)
+            raise
         finally:
             engine.unregister_process(run["id"], process_handle)
 
@@ -143,6 +147,21 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def _final_cost_for_event(self, parsed: dict[str, Any]) -> float | None:
         return final_cost_for_event(parsed)
+
+    def _stream_limit_bytes(self) -> int:
+        if self.settings is None:
+            return 16 * 1024 * 1024
+        return self.settings.claude_stream_limit_bytes
+
+    async def _terminate_process(self, process_handle: asyncio.subprocess.Process) -> None:
+        if process_handle.returncode is not None:
+            return
+        process_handle.terminate()
+        try:
+            await asyncio.wait_for(process_handle.wait(), timeout=5)
+        except TimeoutError:
+            process_handle.kill()
+            await process_handle.wait()
 
     def _prompt(self, resume: bool, feedback_text: str) -> str:
         base = (

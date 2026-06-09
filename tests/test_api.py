@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,57 @@ class FakeProcess:
 
     async def wait(self) -> int:
         return self.returncode or 0
+
+
+class DummyStore:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    def update_run(self, run_id: str, **updates: Any) -> None:
+        self.updates.append((run_id, updates))
+
+
+class DummyEngine:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.store = DummyStore()
+        self.logs: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.usages: list[dict[str, Any]] = []
+        self.final_usages: list[dict[str, Any]] = []
+        self.final_costs: list[float] = []
+        self.processes: list[Any] = []
+
+    def register_process(self, _run_id: str, process: Any) -> None:
+        self.processes.append(process)
+
+    def unregister_process(self, _run_id: str, process: Any) -> None:
+        if process in self.processes:
+            self.processes.remove(process)
+
+    async def record_usage(self, _run_id: str, _process: dict[str, Any], **usage: Any) -> None:
+        self.usages.append(usage)
+
+    async def record_final_usage(
+        self,
+        _run_id: str,
+        _process: dict[str, Any],
+        final_usage: dict[str, int],
+        *,
+        observed_usage: dict[str, int] | None = None,
+    ) -> None:
+        self.final_usages.append({"final_usage": final_usage, "observed_usage": observed_usage})
+
+    async def record_final_cost(self, _run_id: str, _process: dict[str, Any], total_cost_usd: float) -> None:
+        self.final_costs.append(total_cost_usd)
+
+    async def _log(
+        self,
+        _run_id: str,
+        level: str,
+        message: str,
+        raw_json: dict[str, Any] | None = None,
+    ) -> None:
+        self.logs.append((level, message, raw_json))
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -540,6 +592,113 @@ def test_claude_usage_counts_assistant_messages_once_and_parses_result_usage() -
     assert adapter._final_cost_for_event(result) == 0.123
 
 
+def test_claude_adapter_reads_large_stream_json_line(tmp_path: Path) -> None:
+    settings = Settings(
+        config_root=tmp_path / "config",
+        data_root=tmp_path / "data",
+        default_permission_mode="",
+        default_allowed_tools="",
+        claude_stream_limit_bytes=256 * 1024,
+    )
+    script = """
+import json
+import sys
+
+sys.stdin.read()
+print(json.dumps({
+    "type": "assistant",
+    "session_id": "session-large",
+    "message": {
+        "id": "msg_large",
+        "content": [{"type": "text", "text": "x" * 70000}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    },
+}), flush=True)
+print(json.dumps({
+    "type": "result",
+    "session_id": "session-large",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}), flush=True)
+"""
+    adapter = ClaudeCodeAdapter([sys.executable, "-c", script], settings)
+    engine = DummyEngine(settings)
+
+    result = asyncio.run(
+        adapter.run(
+            engine,  # type: ignore[arg-type]
+            {"id": "run_large", "workdir_path": str(tmp_path), "session_id": None},
+            {"agent_model": "claude-opus-4-8", "agent_effort": ""},
+            resume=False,
+            feedback_text="",
+        )
+    )
+
+    assert result.ok is True
+    assert result.session_id == "session-large"
+    assert any(level == "info" and len(message) == 70000 for level, message, _raw in engine.logs)
+    assert engine.usages == [
+        {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read": 0,
+            "cache_write": 0,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+        }
+    ]
+
+
+def test_claude_adapter_terminates_child_when_stream_reader_fails(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        config_root=tmp_path / "config",
+        data_root=tmp_path / "data",
+        default_permission_mode="",
+        default_allowed_tools="",
+        claude_stream_limit_bytes=1024,
+    )
+    script = """
+import json
+import sys
+import time
+
+sys.stdin.read()
+print(json.dumps({
+    "type": "assistant",
+    "message": {"content": [{"type": "text", "text": "x" * 5000}]},
+}), flush=True)
+time.sleep(60)
+"""
+    captured: dict[str, asyncio.subprocess.Process] = {}
+    original_create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def capture_process(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await original_create_subprocess_exec(*args, **kwargs)
+        captured["process"] = process
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process)
+    adapter = ClaudeCodeAdapter([sys.executable, "-c", script], settings)
+    engine = DummyEngine(settings)
+
+    try:
+        asyncio.run(
+            adapter.run(
+                engine,  # type: ignore[arg-type]
+                {"id": "run_fail", "workdir_path": str(tmp_path), "session_id": None},
+                {"agent_model": "claude-opus-4-8", "agent_effort": ""},
+                resume=False,
+                feedback_text="",
+            )
+        )
+    except ValueError as exc:
+        assert "Separator is found, but chunk is longer than limit" in str(exc)
+    else:
+        raise AssertionError("stream reader limit should fail")
+
+    assert captured["process"].returncode is not None
+    assert engine.processes == []
+
+
 def test_final_usage_reconciles_tokens_without_result_cost_override(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "usage totals"}).json()
@@ -730,7 +889,20 @@ def test_file_output_path_is_derived_from_artifact_name(tmp_path: Path) -> None:
         output_yaml = Path(run["workdir_path"]) / "output" / "output.yaml"
         data = yaml.safe_load(output_yaml.read_text(encoding="utf-8"))
         assert data["output"][0]["id"] == artifact["id"]
-        assert data["output"][0]["path"] == "output/final_report.md"
+        assert data["output"][0]["path"] == "output/final_report"
+
+
+def test_file_output_path_preserves_artifact_extension(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "html-path"}).json()
+        process = create_process(client, workflow["id"], "Producer")
+        artifact = attach_output(client, workflow["id"], process, "DetaileDesign.html", "file")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        output_yaml = Path(run["workdir_path"]) / "output" / "output.yaml"
+        data = yaml.safe_load(output_yaml.read_text(encoding="utf-8"))
+        assert data["output"][0]["id"] == artifact["id"]
+        assert data["output"][0]["path"] == "output/DetaileDesign.html"
 
 
 def test_reject_marks_original_run_rejected_and_starts_child(tmp_path: Path) -> None:

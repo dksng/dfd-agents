@@ -229,7 +229,7 @@ class ExecutionEngine:
                 artifact_type = artifact["type"]
             value = {"artifact_id": artifact["id"], "artifact_type": artifact_type}
             if artifact_type == "file":
-                value["file_path"] = item.get("path") or f"output/{safe_name(item.get('name') or artifact['name'])}.md"
+                value["file_path"] = item.get("path") or f"output/{safe_name(item.get('name') or artifact['name'])}"
             elif artifact_type == "url":
                 value["url"] = item.get("url") or ""
             else:

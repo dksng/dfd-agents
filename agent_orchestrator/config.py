@@ -27,6 +27,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    value = _int_env(name, default)
+    return value if value > 0 else default
+
+
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -59,6 +64,9 @@ class Settings(BaseModel):
             "ORCH_CLAUDE_COMMAND",
             "claude --print --verbose --output-format stream-json",
         )
+    )
+    claude_stream_limit_bytes: int = Field(
+        default_factory=lambda: _positive_int_env("ORCH_CLAUDE_STREAM_LIMIT_BYTES", 16 * 1024 * 1024)
     )
     api_base: str = Field(default_factory=lambda: os.getenv("ORCH_API_BASE", "http://127.0.0.1:8000"))
     qa_timeout_seconds: int = Field(default_factory=lambda: _int_env("ORCH_QA_TIMEOUT_SECONDS", 3600))

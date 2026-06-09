@@ -112,7 +112,7 @@ class WorkspaceBuilder:
         item = {"id": artifact["id"], "name": artifact["name"], "type": artifact_type}
         if artifact_type == "file":
             upstream_workdir = Path(upstream_run["workdir_path"]).resolve()
-            rel_path = upstream_value.get("file_path") or f"output/{safe_name(artifact['name'])}.md"
+            rel_path = upstream_value.get("file_path") or f"output/{safe_name(artifact['name'])}"
             source = (upstream_workdir / rel_path).resolve()
             filename = safe_name(Path(rel_path).name)
             target = workdir / "input" / filename
@@ -154,7 +154,7 @@ class WorkspaceBuilder:
             spec = artifact.get("spec_json") or {}
             item = {"id": artifact["id"], "name": artifact["name"], "type": artifact["type"]}
             if artifact["type"] == "file":
-                item["path"] = f"output/{safe_name(artifact['name'])}.md"
+                item["path"] = f"output/{safe_name(artifact['name'])}"
             elif artifact["type"] == "url":
                 item["url"] = spec.get("url", "")
             else:
