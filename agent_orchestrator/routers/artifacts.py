@@ -75,7 +75,9 @@ async def upload_artifact_source_file(
     upload_dir = settings.workflow_root / artifact["workflow_id"] / "source_uploads" / artifact_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     target = upload_dir / clean_filename
-    target.write_bytes(await request.body())
+    with target.open("wb") as handle:
+        async for chunk in request.stream():
+            handle.write(chunk)
     updated = store.update_artifact(artifact_id, {"source_file_path": str(target)})
     await hub.publish_graph(updated["workflow_id"], "artifact.update", {"artifact_id": artifact_id}, origin=client_id)
     return updated

@@ -41,7 +41,7 @@ class EventHub:
         for websocket in targets:
             try:
                 await websocket.send_json(event)
-            except RuntimeError:
+            except Exception:  # one dead/broken client must not break delivery or the caller
                 await self.disconnect(run_id, websocket)
                 await self.disconnect_global(websocket)
 

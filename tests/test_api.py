@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -1590,3 +1591,67 @@ def test_api_base_for_serve_host_port() -> None:
     assert api_base_for("::", 9001) == "http://127.0.0.1:9001"
     assert api_base_for("192.168.10.5", 8000) == "http://192.168.10.5:8000"
     assert api_base_for("::1", 8000) == "http://[::1]:8000"
+
+
+def test_default_pricing_includes_haiku_4_5(tmp_path: Path) -> None:
+    pricing = Pricing(tmp_path / "pricing.yaml")
+    cost = pricing.cost(
+        "claude-haiku-4-5",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_read=1_000_000,
+        cache_write_5m=1_000_000,
+        cache_write_1h=1_000_000,
+    )
+    assert cost == 9.35
+
+
+def test_unknown_model_costs_zero(tmp_path: Path) -> None:
+    pricing = Pricing(tmp_path / "pricing.yaml")
+    assert pricing.cost("model-without-pricing", input_tokens=1_000_000) == 0.0
+
+
+def test_qa_wait_wakes_promptly_on_answer(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "qa-wake"}).json()
+        process = create_process(client, workflow["id"], "Ask", "design")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+
+        result: dict[str, Any] = {}
+
+        def wait_for_answer() -> None:
+            response = client.post(
+                f"/api/runs/{run['id']}/qa?timeout_seconds=30",
+                json={"question_text": "Which branch?"},
+                headers=AUTH,
+            )
+            result["status_code"] = response.status_code
+            result["payload"] = response.json()
+
+        waiter = threading.Thread(target=wait_for_answer)
+        waiter.start()
+        try:
+            qa_id = ""
+            deadline = time.time() + 5
+            while time.time() < deadline and not qa_id:
+                refreshed = client.get(f"/api/runs/{run['id']}").json()
+                if refreshed["qa"]:
+                    qa_id = refreshed["qa"][0]["id"]
+                else:
+                    time.sleep(0.05)
+            assert qa_id, "QA was not registered in time"
+
+            answered_at = time.time()
+            answer = client.post(f"/api/qa/{qa_id}/answer", json={"answer_text": "main"})
+            assert answer.status_code == 200
+            waiter.join(timeout=5)
+        finally:
+            if waiter.is_alive():
+                client.post(f"/api/qa/{qa_id}/answer", json={"answer_text": "unblock"})
+                waiter.join(timeout=5)
+
+        assert not waiter.is_alive()
+        assert result["status_code"] == 200
+        assert result["payload"]["answer_text"] == "main"
+        # The waiter must wake via the event, well inside the 5s fallback poll.
+        assert time.time() - answered_at < 4

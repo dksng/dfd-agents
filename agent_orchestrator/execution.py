@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shlex
 import shutil
 import time
@@ -38,6 +39,8 @@ class ExecutionEngine:
         self._run_meta: dict[str, tuple[str, str]] = {}
         # Strong references so in-flight agent tasks are not garbage collected.
         self._agent_tasks: set[asyncio.Task[None]] = set()
+        # Wakes a waiting register_question() as soon as its QA is answered or canceled.
+        self._qa_events: dict[str, asyncio.Event] = {}
 
     def _spawn_agent_task(self, run_id: str, *, resume: bool, feedback_text: str = "") -> None:
         task = asyncio.create_task(self._run_agent(run_id, resume=resume, feedback_text=feedback_text))
@@ -123,26 +126,34 @@ class ExecutionEngine:
             return qa
         timeout = self.settings.qa_timeout_seconds if timeout_seconds is None else timeout_seconds
         deadline = time.monotonic() + max(timeout, 0)
-        while True:
-            current = self.store.get_qa(qa["id"])
-            if current["status"] == "answered":
-                self.store.update_run(run_id, status="running", ended_at=None)
-                await self._publish(run_id, "status", {"status": "running"})
-                return current
-            if current["status"] != "pending":
-                # Resolved elsewhere (run canceled, or timed out by another waiter).
-                raise ConflictError(f"QA is no longer pending: {current['status']}")
-            if time.monotonic() >= deadline:
-                timed_out = self.store.timeout_qa(qa["id"])
-                if not timed_out.get("timed_out_by_this_call"):
-                    continue
-                self.store.update_run(run_id, status="failed")
-                await self._publish(run_id, "qa_timeout", timed_out)
-                await self._publish(run_id, "status", {"status": "failed"})
-                await self._log(run_id, "error", f"QA timed out after {timeout} seconds")
-                await self.terminate_process(run_id, reason="Terminated agent process after QA timeout")
-                raise TimeoutError(f"QA timed out after {timeout} seconds")
-            await asyncio.sleep(1)
+        event = self._qa_events.setdefault(qa["id"], asyncio.Event())
+        try:
+            while True:
+                event.clear()
+                current = self.store.get_qa(qa["id"])
+                if current["status"] == "answered":
+                    self.store.update_run(run_id, status="running", ended_at=None)
+                    await self._publish(run_id, "status", {"status": "running"})
+                    return current
+                if current["status"] != "pending":
+                    # Resolved elsewhere (run canceled, or timed out by another waiter).
+                    raise ConflictError(f"QA is no longer pending: {current['status']}")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = self.store.timeout_qa(qa["id"])
+                    if not timed_out.get("timed_out_by_this_call"):
+                        continue
+                    self.store.update_run(run_id, status="failed")
+                    await self._publish(run_id, "qa_timeout", timed_out)
+                    await self._publish(run_id, "status", {"status": "failed"})
+                    await self._log(run_id, "error", f"QA timed out after {timeout} seconds")
+                    await self.terminate_process(run_id, reason="Terminated agent process after QA timeout")
+                    raise TimeoutError(f"QA timed out after {timeout} seconds")
+                # Wakes on answer/cancel; the cap re-checks the store as a fallback.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(event.wait(), timeout=min(remaining, 5))
+        finally:
+            self._qa_events.pop(qa["id"], None)
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:
         run = self.store.get_run(run_id)
@@ -151,6 +162,7 @@ class ExecutionEngine:
         for qa in run["qa"]:
             if qa["status"] == "pending":
                 self.store.cancel_qa(qa["id"])
+                self._wake_qa_waiter(qa["id"])
         self.store.update_run(run_id, status="failed")
         await self._publish(run_id, "status", {"status": "failed"})
         await self._log(run_id, "error", "Run canceled by user")
@@ -163,10 +175,16 @@ class ExecutionEngine:
         if run["status"] != "waiting_qa":
             raise ConflictError(f"QA cannot be answered while run is {run['status']}")
         qa = self.store.answer_qa(qa_id, answer_text)
+        self._wake_qa_waiter(qa_id)
         self.store.update_run(qa["run_id"], status="running", ended_at=None)
         await self._publish(qa["run_id"], "qa_answered", qa)
         await self._publish(qa["run_id"], "status", {"status": "running"})
         return qa
+
+    def _wake_qa_waiter(self, qa_id: str) -> None:
+        event = self._qa_events.get(qa_id)
+        if event:
+            event.set()
 
     async def _run_agent(self, run_id: str, *, resume: bool, feedback_text: str = "") -> None:
         run = self.store.get_run(run_id)
@@ -194,6 +212,8 @@ class ExecutionEngine:
                 self.store.update_run(run_id, status="failed")
                 await self._publish(run_id, "status", {"status": "failed"})
             await self._log(run_id, "error", str(exc))
+        finally:
+            self._run_meta.pop(run_id, None)
 
     def register_process(self, run_id: str, process: asyncio.subprocess.Process) -> None:
         self._active_processes[run_id] = process
@@ -394,6 +414,10 @@ class ExecutionEngine:
         run = self.store.get_run(run_id)
         process = self.store.get_process(run["process_id"])
         identity = (run["process_id"], process["workflow_id"])
+        if len(self._run_meta) > 1024:
+            # Entries re-cached after a run ends (e.g. review events) are never
+            # popped individually; reset rather than grow without bound.
+            self._run_meta.clear()
         self._run_meta[run_id] = identity
         return identity
 

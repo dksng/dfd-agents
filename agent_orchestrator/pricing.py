@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PRICING = {
     "cost_source": "pricing",
@@ -73,6 +76,15 @@ DEFAULT_PRICING = {
             "cache_write_5m": 3.75,
             "cache_write_1h": 6.0,
         },
+        "claude-haiku-4-5": {
+            "enabled": True,
+            "label": "Claude Haiku 4.5",
+            "input": 1.0,
+            "output": 5.0,
+            "cache_read": 0.1,
+            "cache_write_5m": 1.25,
+            "cache_write_1h": 2.0,
+        },
     },
 }
 
@@ -81,6 +93,7 @@ class Pricing:
     def __init__(self, path: Path):
         self.path = path
         self.table = self._load()
+        self._warned_models: set[str] = set()
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -141,6 +154,9 @@ class Pricing:
     ) -> float:
         rates = self.table.get("models", {}).get(model)
         if not rates:
+            if model not in self._warned_models:
+                self._warned_models.add(model)
+                logger.warning("No pricing entry for model %r; recording cost as 0. Add it to %s", model, self.path)
             return 0.0
         legacy_cache_write_rate = float(rates.get("cache_write", rates.get("cache_write_5m", 0)))
         if cache_write_5m or cache_write_1h:
