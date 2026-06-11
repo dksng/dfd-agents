@@ -4,11 +4,15 @@ export interface HealthInfo {
   status: string;
   agent_mode: string;
   claude_available: boolean;
-  active_adapter: "mock" | "claude";
+  copilot_available: boolean;
+  active_adapter: "mock" | "claude" | "copilot";
   claude_command: string;
+  copilot_command: string;
   default_permission_mode: string;
   default_allowed_tools: string;
   default_disallowed_tools: string;
+  default_copilot_allowed_tools: string;
+  default_copilot_disallowed_tools: string;
 }
 
 export interface AppSettings {

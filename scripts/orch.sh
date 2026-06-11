@@ -818,6 +818,7 @@ PY
   doctor_line "node_modules" "$([[ -d "$FRONTEND_DIR/node_modules" ]] && printf present || printf missing)"
   doctor_line "frontend dist" "$([[ -f "$DIST_DIR/index.html" ]] && printf present || printf missing)"
   doctor_line "claude" "$(command -v claude 2>/dev/null || printf 'missing (mock adapter if ORCH_AGENT_MODE=auto)')"
+  doctor_line "copilot" "$(command -v copilot 2>/dev/null || printf 'missing (copilot agent unavailable)')"
   doctor_line "gh" "$(command -v gh 2>/dev/null || printf 'missing (remote skills unavailable)')"
   doctor_line "host:port" "$HOST:$PORT ($port_status)"
   doctor_line "permission mode" "${ORCH_DEFAULT_PERMISSION_MODE:-default}"

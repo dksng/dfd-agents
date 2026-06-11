@@ -68,6 +68,10 @@ class Settings(BaseModel):
     claude_stream_limit_bytes: int = Field(
         default_factory=lambda: _positive_int_env("ORCH_CLAUDE_STREAM_LIMIT_BYTES", 16 * 1024 * 1024)
     )
+    copilot_command: str = Field(default_factory=lambda: os.getenv("ORCH_COPILOT_COMMAND", "copilot"))
+    copilot_stream_limit_bytes: int = Field(
+        default_factory=lambda: _positive_int_env("ORCH_COPILOT_STREAM_LIMIT_BYTES", 16 * 1024 * 1024)
+    )
     api_base: str = Field(default_factory=lambda: os.getenv("ORCH_API_BASE", "http://127.0.0.1:8000"))
     qa_timeout_seconds: int = Field(default_factory=lambda: _int_env("ORCH_QA_TIMEOUT_SECONDS", 3600))
     # 工程が permission_mode を空("")にしているときに使うグローバル既定。
@@ -82,6 +86,13 @@ class Settings(BaseModel):
         )
     )
     default_disallowed_tools: str = Field(default_factory=lambda: os.getenv("ORCH_DEFAULT_DISALLOWED_TOOLS", ""))
+    # Copilot CLI uses a different permission grammar (for example: write,shell(git:*)).
+    default_copilot_allowed_tools: str = Field(
+        default_factory=lambda: os.getenv("ORCH_DEFAULT_COPILOT_ALLOWED_TOOLS", "")
+    )
+    default_copilot_disallowed_tools: str = Field(
+        default_factory=lambda: os.getenv("ORCH_DEFAULT_COPILOT_DISALLOWED_TOOLS", "")
+    )
     notify_events: list[str] = Field(
         default_factory=lambda: normalize_notify_events(_split_env_list(os.getenv("ORCH_NOTIFY_EVENTS")))
     )

@@ -5,6 +5,37 @@ import { PERMISSION_MODES } from "../types";
 import type { ArtifactNode, HealthInfo, ModelOption, ProcessNode, SkillCandidate } from "../types";
 
 const EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"];
+const COPILOT_MODEL_OPTIONS: ModelOption[] = [
+  { id: "auto", label: "Copilot auto", input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 },
+  {
+    id: "claude-sonnet-4.6",
+    label: "Claude Sonnet 4.6 (Copilot)",
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write_5m: 0,
+    cache_write_1h: 0
+  },
+  { id: "gpt-5.4", label: "GPT-5.4", input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 },
+  {
+    id: "gpt-5.3-codex",
+    label: "GPT-5.3 Codex",
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write_5m: 0,
+    cache_write_1h: 0
+  },
+  {
+    id: "claude-haiku-4.5",
+    label: "Claude Haiku 4.5 (Copilot)",
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write_5m: 0,
+    cache_write_1h: 0
+  }
+];
 
 type ProcessInspectorProps = {
   processDraft: ProcessNode | null;
@@ -54,6 +85,15 @@ export function ProcessInspector({
   if (!processDraft) {
     return null;
   }
+  const displayedModelOptions = processDraft.agent_kind === "copilot" ? COPILOT_MODEL_OPTIONS : modelOptions;
+  const allowedToolsPlaceholder =
+    processDraft.agent_kind === "copilot"
+      ? health?.default_copilot_allowed_tools || "write,shell(git:*),shell(python3:*)"
+      : (health?.default_allowed_tools ?? "");
+  const disallowedToolsPlaceholder =
+    processDraft.agent_kind === "copilot"
+      ? health?.default_copilot_disallowed_tools || "(none)"
+      : health?.default_disallowed_tools || "(none)";
 
   return (
     <>
@@ -81,6 +121,7 @@ export function ProcessInspector({
           Agent
           <select value={processDraft.agent_kind} onChange={(event) => onUpdateDraft("agent_kind", event.target.value)}>
             <option value="claude">claude</option>
+            <option value="copilot">copilot</option>
           </select>
         </label>
         <label>
@@ -89,10 +130,10 @@ export function ProcessInspector({
             value={processDraft.agent_model}
             onChange={(event) => onUpdateDraft("agent_model", event.target.value)}
           >
-            {!modelOptions.some((model) => model.id === processDraft.agent_model) && (
+            {!displayedModelOptions.some((model) => model.id === processDraft.agent_model) && (
               <option value={processDraft.agent_model}>{processDraft.agent_model}</option>
             )}
-            {modelOptions.map((model) => (
+            {displayedModelOptions.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.label}
               </option>
@@ -134,7 +175,7 @@ export function ProcessInspector({
           Allowed tools (comma-separated)
           <input
             value={processDraft.allowed_tools}
-            placeholder={health?.default_allowed_tools ?? ""}
+            placeholder={allowedToolsPlaceholder}
             onChange={(event) => onUpdateDraft("allowed_tools", event.target.value)}
           />
         </label>
@@ -142,13 +183,13 @@ export function ProcessInspector({
           Disallowed tools
           <input
             value={processDraft.disallowed_tools}
-            placeholder={health?.default_disallowed_tools || "(none)"}
+            placeholder={disallowedToolsPlaceholder}
             onChange={(event) => onUpdateDraft("disallowed_tools", event.target.value)}
           />
         </label>
         <small className="muted-line">
-          Empty = inherit global default. Submission runs utils/submit.py via Bash, so the effective permissions must
-          allow it (the default allowlist covers python; or use bypassPermissions).
+          Empty = inherit global default. Submission runs utils/submit.py via shell, so the effective permissions must
+          allow it.
         </small>
       </div>
 

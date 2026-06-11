@@ -395,8 +395,8 @@ export function App() {
       {health?.active_adapter === "mock" && (
         <div className="warn-line">
           <span>
-            Mock agent active (claude CLI not detected; runs complete instantly into review). Set ORCH_AGENT_MODE=claude
-            and ensure `claude` is on PATH for real execution.
+            Mock agent active (selected CLI not detected; runs complete instantly into review). Set ORCH_AGENT_MODE or
+            ensure `claude` / `copilot` is on PATH for real execution.
           </span>
         </div>
       )}

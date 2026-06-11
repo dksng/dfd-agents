@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 from fastapi.testclient import TestClient
 
+from agent_orchestrator.adapters.copilot import CopilotCliAdapter
 from agent_orchestrator.api import create_app
 from agent_orchestrator.config import Settings
 from agent_orchestrator.execution import ClaudeCodeAdapter
@@ -278,6 +279,52 @@ def test_process_overrides_global_permission_mode() -> None:
     assert command[allowed_at + 1 : allowed_at + 3] == ["Write", "Bash(python3 *)"]
 
 
+def test_copilot_command_uses_programmatic_prompt_and_permissions() -> None:
+    settings = Settings(
+        default_permission_mode="bypassPermissions",
+        default_copilot_allowed_tools="write,shell(git:*)",
+        default_copilot_disallowed_tools="shell(git push)",
+    )
+    adapter = CopilotCliAdapter(["copilot"], settings)
+    command = adapter._command_for_process(
+        {
+            "agent_model": "claude-sonnet-4-6",
+            "agent_effort": "high",
+            "permission_mode": "",
+            "allowed_tools": "",
+            "disallowed_tools": "",
+        },
+        "do the work",
+    )
+
+    assert "--output-format=json" in command
+    assert "--model=claude-sonnet-4.6" in command
+    assert "--effort=high" in command
+    assert "--allow-all" in command
+    assert "--no-ask-user" in command
+    assert "--allow-tool=write,shell(git:*)" in command
+    assert "--deny-tool=shell(git push)" in command
+    assert command[-2:] == ["-p", "do the work"]
+
+
+def test_copilot_command_translates_claude_style_process_tools() -> None:
+    settings = Settings(default_permission_mode="default")
+    adapter = CopilotCliAdapter(["copilot"], settings)
+    command = adapter._command_for_process(
+        {
+            "agent_model": "gpt-5.3-codex",
+            "agent_effort": "",
+            "permission_mode": "",
+            "allowed_tools": "Read,Write,Bash(python3 *)",
+            "disallowed_tools": "Bash(git push)",
+        },
+        "prompt",
+    )
+
+    assert "--allow-tool=read,write,shell(python3:*)" in command
+    assert "--deny-tool=shell(git push)" in command
+
+
 def test_permission_mode_persists_and_rejects_invalid(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         workflow = client.post("/api/workflows", json={"name": "perm"}).json()
@@ -298,11 +345,34 @@ def test_permission_mode_persists_and_rejects_invalid(tmp_path: Path) -> None:
         assert bad.status_code == 422
 
 
+def test_agent_kind_persists_and_rejects_invalid(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "agent-kind"}).json()
+        process = client.post(
+            f"/api/workflows/{workflow['id']}/processes",
+            json={"name": "Impl", "type": "implement"},
+        ).json()
+        updated = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"agent_kind": "copilot", "agent_model": "auto"},
+        ).json()
+        assert updated["agent_kind"] == "copilot"
+        assert updated["agent_model"] == "auto"
+
+        bad = client.put(
+            f"/api/processes/{process['id']}/config",
+            json={"agent_kind": "unknown"},
+        )
+        assert bad.status_code == 422
+
+
 def test_health_reports_permission_defaults(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         health = client.get("/api/health").json()
         assert health["default_permission_mode"]
         assert "default_allowed_tools" in health
+        assert "copilot_available" in health
+        assert "copilot_command" in health
 
 
 def test_command_rejects_invalid_effort() -> None:
@@ -697,6 +767,138 @@ time.sleep(60)
 
     assert captured["process"].returncode is not None
     assert engine.processes == []
+
+
+def test_copilot_adapter_runs_prompt_and_logs_output(tmp_path: Path) -> None:
+    settings = Settings(
+        config_root=tmp_path / "config",
+        data_root=tmp_path / "data",
+        default_permission_mode="",
+        default_copilot_allowed_tools="",
+    )
+    (tmp_path / ".claude" / "skills").mkdir(parents=True)
+    script = """
+import json
+import os
+import sys
+
+assert "-p" in sys.argv
+assert os.environ["ORCH_RUN_ID"] == "run_copilot"
+assert os.environ.get("COPILOT_SKILLS_DIRS")
+print(json.dumps({
+    "type": "message",
+    "session_id": "copilot-session",
+    "message": {"text": "copilot hello"},
+}), flush=True)
+print("plain line", flush=True)
+"""
+    adapter = CopilotCliAdapter([sys.executable, "-c", script], settings)
+    engine = DummyEngine(settings)
+
+    result = asyncio.run(
+        adapter.run(
+            engine,  # type: ignore[arg-type]
+            {"id": "run_copilot", "workdir_path": str(tmp_path), "session_id": None},
+            {
+                "agent_model": "auto",
+                "agent_effort": "",
+                "permission_mode": "",
+                "allowed_tools": "",
+                "disallowed_tools": "",
+            },
+            resume=False,
+            feedback_text="",
+        )
+    )
+
+    assert result.ok is True
+    assert result.session_id == "copilot-session"
+    assert ("run_copilot", {"session_id": "copilot-session"}) in engine.store.updates
+    assert (
+        "info",
+        "copilot hello",
+        {"type": "message", "session_id": "copilot-session", "message": {"text": "copilot hello"}},
+    ) in engine.logs
+    assert any(level == "info" and message == "plain line" for level, message, _raw in engine.logs)
+
+
+def test_copilot_adapter_parses_session_events_and_records_usage(tmp_path: Path) -> None:
+    settings = Settings(config_root=tmp_path / "config", data_root=tmp_path / "data")
+    script = """
+import json
+
+def emit(event):
+    print(json.dumps(event), flush=True)
+
+emit({"type": "session.start", "data": {"sessionId": "sess-events", "selectedModel": "auto"}})
+emit({"type": "assistant.message_delta", "data": {"content": "chunk"}})
+emit({"type": "assistant.message", "data": {"content": "final answer"}})
+emit({
+    "type": "assistant.usage",
+    "data": {"model": "auto", "inputTokens": 120, "outputTokens": 30, "cacheReadTokens": 50, "cacheWriteTokens": 10},
+})
+emit({"type": "session.warning", "data": {"message": "be careful"}})
+emit({"type": "session.error", "data": {"message": "boom"}})
+"""
+    adapter = CopilotCliAdapter([sys.executable, "-c", script], settings)
+    engine = DummyEngine(settings)
+
+    result = asyncio.run(
+        adapter.run(
+            engine,  # type: ignore[arg-type]
+            {"id": "run_events", "workdir_path": str(tmp_path), "session_id": None},
+            {
+                "agent_model": "auto",
+                "agent_effort": "",
+                "permission_mode": "",
+                "allowed_tools": "",
+                "disallowed_tools": "",
+            },
+            resume=False,
+            feedback_text="",
+        )
+    )
+
+    assert result.ok is True
+    assert result.session_id == "sess-events"
+    assert ("run_events", {"session_id": "sess-events"}) in engine.store.updates
+    assert engine.usages == [{"input_tokens": 120, "output_tokens": 30, "cache_read": 50, "cache_write": 10}]
+    messages = [(level, message) for level, message, _raw in engine.logs]
+    assert ("info", "final answer") in messages
+    assert ("warning", "be careful") in messages
+    assert ("error", "boom") in messages
+    assert all(message != "chunk" for _level, message in messages)
+
+
+def test_copilot_adapter_resumes_session_with_feedback(tmp_path: Path) -> None:
+    settings = Settings(config_root=tmp_path / "config", data_root=tmp_path / "data")
+    script = """
+import sys
+
+assert "--resume=sess-resume" in sys.argv
+prompt = sys.argv[sys.argv.index("-p") + 1]
+assert "needs more tests" in prompt
+"""
+    adapter = CopilotCliAdapter([sys.executable, "-c", script], settings)
+    engine = DummyEngine(settings)
+
+    result = asyncio.run(
+        adapter.run(
+            engine,  # type: ignore[arg-type]
+            {"id": "run_resume", "workdir_path": str(tmp_path), "session_id": "sess-resume"},
+            {
+                "agent_model": "auto",
+                "agent_effort": "",
+                "permission_mode": "",
+                "allowed_tools": "",
+                "disallowed_tools": "",
+            },
+            resume=True,
+            feedback_text="needs more tests",
+        )
+    )
+
+    assert result.ok is True
 
 
 def test_final_usage_reconciles_tokens_without_result_cost_override(tmp_path: Path) -> None:
@@ -1274,3 +1476,4 @@ def test_qa_wait_times_out_and_cannot_be_answered_later(tmp_path: Path) -> None:
             json={"answer_text": "too late"},
         )
         assert late_answer.status_code == 409
+

@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from .adapters import AgentAdapter, ClaudeCodeAdapter, MockAgentAdapter
+from .adapters import AgentAdapter, ClaudeCodeAdapter, CopilotCliAdapter, MockAgentAdapter
 from .config import Settings
 from .db import Store
 from .events import EventHub
@@ -140,7 +140,7 @@ class ExecutionEngine:
     async def _run_agent(self, run_id: str, *, resume: bool, feedback_text: str = "") -> None:
         run = self.store.get_run(run_id)
         process = self.store.get_process(run["process_id"])
-        adapter = self._select_adapter()
+        adapter = self._select_adapter(process)
         await self._log(run_id, "info", f"Starting {process['agent_kind']} agent for {process['name']}")
         try:
             result = await adapter.run(self, run, process, resume=resume, feedback_text=feedback_text)
@@ -183,28 +183,59 @@ class ExecutionEngine:
             await process.wait()
         await self._log(run_id, "error", "Terminated agent process after QA timeout")
 
-    def _select_adapter(self) -> AgentAdapter:
+    def _select_adapter(self, process: dict[str, Any] | None = None) -> AgentAdapter:
         mode = self.settings.agent_mode.lower()
-        command = shlex.split(self.settings.claude_command)
-        command_exists = bool(command and shutil.which(command[0]))
-        if mode == "mock" or (mode == "auto" and not command_exists):
+        if mode == "mock":
             return MockAgentAdapter()
+        agent_kind = self._requested_agent_kind(process, mode)
+        command = self._command_for_agent(agent_kind)
+        command_exists = bool(command and shutil.which(command[0]))
+        if mode == "auto" and not command_exists:
+            return MockAgentAdapter()
+        if agent_kind == "copilot":
+            return CopilotCliAdapter(command, self.settings)
         return ClaudeCodeAdapter(command, self.settings)
 
     def describe_adapter(self) -> dict[str, Any]:
         mode = self.settings.agent_mode.lower()
-        command = shlex.split(self.settings.claude_command)
-        claude_available = bool(command and shutil.which(command[0]))
-        active = "mock" if (mode == "mock" or (mode == "auto" and not claude_available)) else "claude"
+        claude_command = shlex.split(self.settings.claude_command)
+        copilot_command = shlex.split(self.settings.copilot_command)
+        claude_available = bool(claude_command and shutil.which(claude_command[0]))
+        copilot_available = bool(copilot_command and shutil.which(copilot_command[0]))
+        if mode == "mock":
+            active = "mock"
+        elif mode == "copilot":
+            active = "copilot"
+        elif mode == "auto" and not claude_available:
+            active = "mock"
+        else:
+            active = "claude"
         return {
             "agent_mode": mode,
             "claude_available": claude_available,
+            "copilot_available": copilot_available,
             "active_adapter": active,
             "claude_command": self.settings.claude_command,
+            "copilot_command": self.settings.copilot_command,
             "default_permission_mode": self.settings.default_permission_mode,
             "default_allowed_tools": self.settings.default_allowed_tools,
             "default_disallowed_tools": self.settings.default_disallowed_tools,
+            "default_copilot_allowed_tools": self.settings.default_copilot_allowed_tools,
+            "default_copilot_disallowed_tools": self.settings.default_copilot_disallowed_tools,
         }
+
+    def _requested_agent_kind(self, process: dict[str, Any] | None, mode: str) -> str:
+        process_kind = str((process or {}).get("agent_kind") or "claude").lower()
+        if mode == "copilot":
+            return "copilot"
+        if mode == "claude" and process_kind != "copilot":
+            return "claude"
+        return "copilot" if process_kind == "copilot" else "claude"
+
+    def _command_for_agent(self, agent_kind: str) -> list[str]:
+        if agent_kind == "copilot":
+            return shlex.split(self.settings.copilot_command)
+        return shlex.split(self.settings.claude_command)
 
     def _read_output_values(self, run: dict[str, Any]) -> list[dict[str, Any]]:
         workdir = Path(run["workdir_path"])

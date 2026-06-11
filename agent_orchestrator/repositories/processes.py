@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_orchestrator.agent_options import AGENT_EFFORT_VALUES, PERMISSION_MODE_VALUES
+from agent_orchestrator.agent_options import AGENT_EFFORT_VALUES, AGENT_KIND_VALUES, PERMISSION_MODE_VALUES
 from agent_orchestrator.db_ids import new_id
 from agent_orchestrator.exceptions import AppValidationError, NotFoundError
 
@@ -61,6 +61,8 @@ class ProcessRepository:
             "execution_mode",
         }
         updates = {key: value for key, value in data.items() if key in allowed and value is not None}
+        if "agent_kind" in updates and updates["agent_kind"] not in AGENT_KIND_VALUES:
+            raise AppValidationError(f"Invalid agent_kind: {updates['agent_kind']}")
         if "agent_effort" in updates and updates["agent_effort"] not in AGENT_EFFORT_VALUES:
             raise AppValidationError(f"Invalid agent_effort: {updates['agent_effort']}")
         if "permission_mode" in updates and updates["permission_mode"] not in PERMISSION_MODE_VALUES:
