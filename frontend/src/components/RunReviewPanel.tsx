@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Check, MessageSquare, Play, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, MessageSquare, Play, Square, X } from "lucide-react";
 import { artifactDownloadUrl } from "../api";
 import { formatCost } from "../lib/format";
 import type { ArtifactNode, ArtifactValue, CostSummary, QAItem, ReviewItem, RunDetail, RunSummary } from "../types";
@@ -19,6 +19,7 @@ type RunReviewPanelProps = {
   versionLoading: boolean;
   onToggleExpanded: () => void;
   onResumeRun: () => void;
+  onCancelRun: () => void;
   onQaAnswerChange: (value: string) => void;
   onAnswerQA: () => void;
   onFeedbackChange: (value: string) => void;
@@ -82,6 +83,7 @@ export function RunReviewPanel({
   versionLoading,
   onToggleExpanded,
   onResumeRun,
+  onCancelRun,
   onQaAnswerChange,
   onAnswerQA,
   onFeedbackChange,
@@ -127,6 +129,13 @@ export function RunReviewPanel({
             <button className="icon-text" onClick={onResumeRun}>
               <Play size={15} />
               Resume
+            </button>
+          )}
+
+          {(selectedRun.status === "running" || selectedRun.status === "waiting_qa") && (
+            <button className="icon-text danger" onClick={onCancelRun}>
+              <Square size={15} />
+              Stop
             </button>
           )}
 
@@ -192,11 +201,7 @@ export function RunReviewPanel({
                     <StatusPill status={versionRun.status} />
                     <span>{new Date(versionRun.started_at).toLocaleString()}</span>
                   </div>
-                  <ArtifactRows
-                    artifacts={versionRun.artifacts}
-                    artifactById={artifactById}
-                    runId={versionRun.id}
-                  />
+                  <ArtifactRows artifacts={versionRun.artifacts} artifactById={artifactById} runId={versionRun.id} />
                 </>
               )}
             </>

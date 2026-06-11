@@ -10,12 +10,13 @@ from typing import Any
 import yaml
 
 from .adapters import AgentAdapter, ClaudeCodeAdapter, CopilotCliAdapter, MockAgentAdapter
+from .agent_options import AGENT_KIND_VALUES
 from .config import Settings
 from .db import Store
 from .events import EventHub
 from .exceptions import ConflictError
 from .pricing import Pricing
-from .run_state import can_public_resume, can_review, can_submit
+from .run_state import can_cancel, can_public_resume, can_review, can_submit
 from .workspace import WorkspaceBuilder, safe_name
 
 
@@ -35,16 +36,29 @@ class ExecutionEngine:
         self.workspace_builder = workspace_builder
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._run_meta: dict[str, tuple[str, str]] = {}
+        # Strong references so in-flight agent tasks are not garbage collected.
+        self._agent_tasks: set[asyncio.Task[None]] = set()
+
+    def _spawn_agent_task(self, run_id: str, *, resume: bool, feedback_text: str = "") -> None:
+        task = asyncio.create_task(self._run_agent(run_id, resume=resume, feedback_text=feedback_text))
+        self._agent_tasks.add(task)
+        task.add_done_callback(self._agent_tasks.discard)
+
+    def _ensure_no_active_run(self, process_id: str) -> None:
+        active = self.store.active_run_for_process(process_id)
+        if active:
+            raise ConflictError(f"Process already has an active run: {active['id']} ({active['status']})")
 
     async def start_process(self, process_id: str) -> dict[str, Any]:
         process = self.store.get_process(process_id)
+        self._ensure_no_active_run(process_id)
         workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / "pending"
         run = self.store.create_run(process_id, status="draft", workdir_path=str(workdir))
         actual_workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / run["id"]
         self.store.update_run(run["id"], workdir_path=str(actual_workdir))
         snapshot = self.workspace_builder.build(run["id"], process_id)
         self.store.update_run(run["id"], status="running", input_snapshot_json=snapshot)
-        asyncio.create_task(self._run_agent(run["id"], resume=False))
+        self._spawn_agent_task(run["id"], resume=False)
         return self.store.get_run(run["id"])
 
     async def resume_run(self, run_id: str, feedback_text: str) -> dict[str, Any]:
@@ -55,6 +69,7 @@ class ExecutionEngine:
 
     async def _resume_run(self, parent: dict[str, Any], feedback_text: str) -> dict[str, Any]:
         process = self.store.get_process(parent["process_id"])
+        self._ensure_no_active_run(process["id"])
         workdir = self.settings.workflow_root / process["workflow_id"] / "runs" / "pending"
         run = self.store.create_run(
             process["id"],
@@ -68,7 +83,7 @@ class ExecutionEngine:
             run["id"], process["id"], parent_run=parent, feedback_text=feedback_text
         )
         self.store.update_run(run["id"], status="running", input_snapshot_json=snapshot)
-        asyncio.create_task(self._run_agent(run["id"], resume=True, feedback_text=feedback_text))
+        self._spawn_agent_task(run["id"], resume=True, feedback_text=feedback_text)
         return self.store.get_run(run["id"])
 
     async def submit_run(self, run_id: str) -> dict[str, Any]:
@@ -114,6 +129,9 @@ class ExecutionEngine:
                 self.store.update_run(run_id, status="running", ended_at=None)
                 await self._publish(run_id, "status", {"status": "running"})
                 return current
+            if current["status"] != "pending":
+                # Resolved elsewhere (run canceled, or timed out by another waiter).
+                raise ConflictError(f"QA is no longer pending: {current['status']}")
             if time.monotonic() >= deadline:
                 timed_out = self.store.timeout_qa(qa["id"])
                 if not timed_out.get("timed_out_by_this_call"):
@@ -122,9 +140,22 @@ class ExecutionEngine:
                 await self._publish(run_id, "qa_timeout", timed_out)
                 await self._publish(run_id, "status", {"status": "failed"})
                 await self._log(run_id, "error", f"QA timed out after {timeout} seconds")
-                await self.terminate_process(run_id)
+                await self.terminate_process(run_id, reason="Terminated agent process after QA timeout")
                 raise TimeoutError(f"QA timed out after {timeout} seconds")
             await asyncio.sleep(1)
+
+    async def cancel_run(self, run_id: str) -> dict[str, Any]:
+        run = self.store.get_run(run_id)
+        if not can_cancel(run["status"]):
+            raise ConflictError(f"Run cannot be canceled from status: {run['status']}")
+        for qa in run["qa"]:
+            if qa["status"] == "pending":
+                self.store.cancel_qa(qa["id"])
+        self.store.update_run(run_id, status="failed")
+        await self._publish(run_id, "status", {"status": "failed"})
+        await self._log(run_id, "error", "Run canceled by user")
+        await self.terminate_process(run_id, reason="Terminated agent process after user cancel")
+        return self.store.get_run(run_id)
 
     async def answer_question(self, qa_id: str, answer_text: str) -> dict[str, Any]:
         current_qa = self.store.get_qa(qa_id)
@@ -171,7 +202,7 @@ class ExecutionEngine:
         if self._active_processes.get(run_id) is process:
             self._active_processes.pop(run_id, None)
 
-    async def terminate_process(self, run_id: str) -> None:
+    async def terminate_process(self, run_id: str, *, reason: str | None = None) -> None:
         process = self._active_processes.get(run_id)
         if process is None or process.returncode is not None:
             return
@@ -181,7 +212,13 @@ class ExecutionEngine:
         except TimeoutError:
             process.kill()
             await process.wait()
-        await self._log(run_id, "error", "Terminated agent process after QA timeout")
+        if reason:
+            await self._log(run_id, "error", reason)
+
+    async def shutdown(self) -> None:
+        """Terminate any agent subprocesses still running when the server stops."""
+        for run_id in list(self._active_processes):
+            await self.terminate_process(run_id, reason="Terminated agent process on server shutdown")
 
     def _select_adapter(self, process: dict[str, Any] | None = None) -> AgentAdapter:
         mode = self.settings.agent_mode.lower()
@@ -204,12 +241,14 @@ class ExecutionEngine:
         copilot_available = bool(copilot_command and shutil.which(copilot_command[0]))
         if mode == "mock":
             active = "mock"
-        elif mode == "copilot":
-            active = "copilot"
-        elif mode == "auto" and not claude_available:
-            active = "mock"
-        else:
+        elif mode in AGENT_KIND_VALUES:
+            active = mode
+        elif claude_available:
             active = "claude"
+        elif copilot_available:
+            active = "copilot"
+        else:
+            active = "mock"
         return {
             "agent_mode": mode,
             "claude_available": claude_available,
@@ -225,12 +264,12 @@ class ExecutionEngine:
         }
 
     def _requested_agent_kind(self, process: dict[str, Any] | None, mode: str) -> str:
+        # An explicit ORCH_AGENT_MODE forces that CLI for every process;
+        # "auto" follows each process's agent_kind.
+        if mode in AGENT_KIND_VALUES:
+            return mode
         process_kind = str((process or {}).get("agent_kind") or "claude").lower()
-        if mode == "copilot":
-            return "copilot"
-        if mode == "claude" and process_kind != "copilot":
-            return "claude"
-        return "copilot" if process_kind == "copilot" else "claude"
+        return process_kind if process_kind in AGENT_KIND_VALUES else "claude"
 
     def _command_for_agent(self, agent_kind: str) -> list[str]:
         if agent_kind == "copilot":

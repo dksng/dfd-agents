@@ -129,6 +129,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ feedback_text })
     }),
+  cancelRun: (id: string) => request<RunDetail>(`/api/runs/${id}/cancel`, { method: "POST" }),
   getRun: (id: string) => request<RunDetail>(`/api/runs/${id}`),
   answerQA: (id: string, answer_text: string) =>
     request(`/api/qa/${id}/answer`, {

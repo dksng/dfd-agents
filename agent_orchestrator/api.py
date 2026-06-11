@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,13 +25,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings.load_runtime_settings()
     store = Store(settings.db_path)
     store.init()
+    # Agent subprocesses never survive a restart; clear stale active runs so
+    # they do not block new runs or linger as "running" in the UI forever.
+    store.fail_orphaned_runs()
     hub = EventHub()
     pricing = Pricing(settings.pricing_path)
     skills = SkillRegistry(settings)
     workspace = WorkspaceBuilder(settings, store, skills)
     engine = ExecutionEngine(settings, store, hub, pricing, workspace)
 
-    app = FastAPI(title="DFD-Agents")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        await engine.shutdown()
+
+    app = FastAPI(title="DFD-Agents", lifespan=lifespan)
     app.state.settings = settings
     app.state.store = store
     app.state.hub = hub
@@ -74,6 +85,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.mount("/", StaticFiles(directory=dist_dir, html=True), name="frontend")
 
     return app
-
-
-app = create_app()

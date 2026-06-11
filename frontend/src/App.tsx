@@ -153,6 +153,7 @@ export function App() {
 
   const {
     answerQA,
+    cancelSelectedRun,
     currentReview,
     feedback,
     pendingQA,
@@ -523,6 +524,7 @@ export function App() {
               versionLoading={versionLoading}
               onToggleExpanded={() => setReviewExpanded((value) => !value)}
               onResumeRun={() => void resumeSelectedRun()}
+              onCancelRun={() => void cancelSelectedRun()}
               onQaAnswerChange={setQaAnswer}
               onAnswerQA={() => void answerQA()}
               onFeedbackChange={setFeedback}

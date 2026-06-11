@@ -5,6 +5,7 @@ from typing import Any
 from agent_orchestrator.db_ids import new_id, now_iso
 from agent_orchestrator.db_json import json_dump, json_load
 from agent_orchestrator.exceptions import ConflictError, NotFoundError
+from agent_orchestrator.run_state import ACTIVE_RUN_STATUSES
 
 
 class RunRepository:
@@ -121,6 +122,35 @@ class RunRepository:
             entry[row["status"]] = row["n"]
         return list(summary.values())
 
+    def active_run_for_process(self, process_id: str) -> dict[str, Any] | None:
+        placeholders = ", ".join("?" for _ in ACTIVE_RUN_STATUSES)
+        with self.connect() as conn:
+            return self._fetchone(
+                conn,
+                f"""
+                SELECT id, status FROM run
+                WHERE process_id = ? AND status IN ({placeholders})
+                ORDER BY started_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (process_id, *ACTIVE_RUN_STATUSES),
+            )
+
+    def fail_orphaned_runs(self) -> int:
+        """Mark runs left active by a previous server process as failed.
+
+        Called at startup: no agent subprocess survives a server restart, so any
+        run still in an active status belongs to a dead process.
+        """
+        placeholders = ", ".join("?" for _ in ACTIVE_RUN_STATUSES)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE run SET status = 'failed', ended_at = ? WHERE status IN ({placeholders})",
+                (now_iso(), *ACTIVE_RUN_STATUSES),
+            )
+            count = cursor.rowcount
+        return count
+
     def latest_approved_run(self, process_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             run = self._fetchone(
@@ -225,6 +255,17 @@ class RunRepository:
             conn.execute(
                 "UPDATE qa SET answer_text = ?, status = 'answered', answered_at = ? WHERE id = ?",
                 (answer_text, now_iso(), qa_id),
+            )
+            qa = self._fetchone(conn, "SELECT * FROM qa WHERE id = ?", (qa_id,))
+        if not qa:
+            raise NotFoundError(f"QA not found: {qa_id}")
+        return qa
+
+    def cancel_qa(self, qa_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE qa SET status = 'canceled', answered_at = ? WHERE id = ? AND status = 'pending'",
+                (now_iso(), qa_id),
             )
             qa = self._fetchone(conn, "SELECT * FROM qa WHERE id = ?", (qa_id,))
         if not qa:

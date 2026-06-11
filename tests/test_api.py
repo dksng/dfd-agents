@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from agent_orchestrator.adapters.copilot import CopilotCliAdapter
 from agent_orchestrator.api import create_app
+from agent_orchestrator.cli import api_base_for
 from agent_orchestrator.config import Settings
 from agent_orchestrator.execution import ClaudeCodeAdapter
 from agent_orchestrator.pricing import Pricing
@@ -1477,3 +1478,115 @@ def test_qa_wait_times_out_and_cannot_be_answered_later(tmp_path: Path) -> None:
         )
         assert late_answer.status_code == 409
 
+
+def test_cancel_run_kills_process_and_blocks_double_cancel(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "cancel"}).json()
+        process = create_process(client, workflow["id"], "Impl")
+        attach_output(client, workflow["id"], process, "result")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        client.app.state.store.update_run(run["id"], status="running", ended_at=None)
+        fake_process = FakeProcess()
+        client.app.state.engine.register_process(run["id"], fake_process)
+
+        canceled = client.post(f"/api/runs/{run['id']}/cancel")
+        assert canceled.status_code == 200
+        assert canceled.json()["status"] == "failed"
+        assert fake_process.terminated is True
+
+        again = client.post(f"/api/runs/{run['id']}/cancel")
+        assert again.status_code == 409
+
+
+def test_cancel_waiting_qa_marks_question_canceled(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "cancel-qa"}).json()
+        process = create_process(client, workflow["id"], "Ask")
+        attach_output(client, workflow["id"], process, "result")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        client.app.state.store.update_run(run["id"], status="running", ended_at=None)
+        qa = client.post(
+            f"/api/runs/{run['id']}/qa?wait=false",
+            json={"question_text": "Which branch?"},
+            headers=AUTH,
+        ).json()
+
+        canceled = client.post(f"/api/runs/{run['id']}/cancel").json()
+        assert canceled["status"] == "failed"
+        assert canceled["qa"][0]["status"] == "canceled"
+
+        late_answer = client.post(f"/api/qa/{qa['id']}/answer", json={"answer_text": "main"})
+        assert late_answer.status_code == 409
+
+
+def test_run_conflicts_while_process_has_active_run(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        workflow = client.post("/api/workflows", json={"name": "active-guard"}).json()
+        process = create_process(client, workflow["id"], "Impl")
+        attach_output(client, workflow["id"], process, "result")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        client.app.state.store.update_run(run["id"], status="running", ended_at=None)
+
+        conflict = client.post(f"/api/processes/{process['id']}/run")
+        assert conflict.status_code == 409
+
+        client.post(f"/api/runs/{run['id']}/cancel")
+        rerun = client.post(f"/api/processes/{process['id']}/run")
+        assert rerun.status_code == 200
+
+
+def test_orphaned_active_runs_fail_on_startup(tmp_path: Path) -> None:
+    def settings() -> Settings:
+        return Settings(
+            config_root=tmp_path / "config",
+            data_root=tmp_path / "data",
+            agent_mode="mock",
+            api_base="http://testserver",
+        )
+
+    with TestClient(create_app(settings())) as client:
+        workflow = client.post("/api/workflows", json={"name": "orphan"}).json()
+        process = create_process(client, workflow["id"], "Impl")
+        attach_output(client, workflow["id"], process, "result")
+        run = client.post(f"/api/processes/{process['id']}/run").json()
+        run = wait_for_status(client, run["id"], {"in_review"})
+        client.app.state.store.update_run(run["id"], status="running", ended_at=None)
+
+    with TestClient(create_app(settings())) as client:
+        refreshed = client.get(f"/api/runs/{run['id']}").json()
+        assert refreshed["status"] == "failed"
+
+
+def test_explicit_agent_mode_forces_agent_kind(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        engine = client.app.state.engine
+        assert engine._requested_agent_kind({"agent_kind": "copilot"}, "claude") == "claude"
+        assert engine._requested_agent_kind({"agent_kind": "claude"}, "copilot") == "copilot"
+        assert engine._requested_agent_kind({"agent_kind": "copilot"}, "auto") == "copilot"
+        assert engine._requested_agent_kind({"agent_kind": ""}, "auto") == "claude"
+
+
+def test_health_auto_mode_prefers_available_cli_over_mock(tmp_path: Path) -> None:
+    settings = Settings(
+        config_root=tmp_path / "config",
+        data_root=tmp_path / "data",
+        agent_mode="auto",
+        claude_command="definitely-not-on-path-xyz --print",
+        copilot_command=sys.executable,
+        api_base="http://testserver",
+    )
+    with TestClient(create_app(settings)) as client:
+        health = client.get("/api/health").json()
+        assert health["claude_available"] is False
+        assert health["copilot_available"] is True
+        assert health["active_adapter"] == "copilot"
+
+
+def test_api_base_for_serve_host_port() -> None:
+    assert api_base_for("0.0.0.0", 9001) == "http://127.0.0.1:9001"
+    assert api_base_for("::", 9001) == "http://127.0.0.1:9001"
+    assert api_base_for("192.168.10.5", 8000) == "http://192.168.10.5:8000"
+    assert api_base_for("::1", 8000) == "http://[::1]:8000"

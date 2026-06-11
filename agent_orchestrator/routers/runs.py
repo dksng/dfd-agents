@@ -28,6 +28,12 @@ def get_run(run_id: str, store: Store = Depends(get_store)) -> dict:
     return store.get_run(run_id)
 
 
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, engine: ExecutionEngine = Depends(get_engine)) -> dict:
+    """Stop a running or QA-waiting run: kill the agent process and mark it failed."""
+    return await engine.cancel_run(run_id)
+
+
 @router.post("/runs/{run_id}/qa")
 async def create_qa(
     run_id: str,

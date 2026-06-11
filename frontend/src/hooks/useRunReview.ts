@@ -121,8 +121,24 @@ export function useRunReview({
     }
   }, [feedback, loadWorkflow, selectedRun, setSelectedRun, workflowId]);
 
+  const cancelSelectedRun = useCallback(async () => {
+    if (!selectedRun || (selectedRun.status !== "running" && selectedRun.status !== "waiting_qa")) {
+      return;
+    }
+    try {
+      const result = await api.cancelRun(selectedRun.id);
+      setSelectedRun(result);
+      if (workflowId) {
+        await loadWorkflow(workflowId);
+      }
+    } catch (exc) {
+      setError(String(exc));
+    }
+  }, [loadWorkflow, selectedRun, setError, setSelectedRun, workflowId]);
+
   return {
     answerQA,
+    cancelSelectedRun,
     currentReview,
     feedback,
     pendingQA,

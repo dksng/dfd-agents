@@ -36,7 +36,7 @@ Environment variables:
 - `ORCH_CONFIG_ROOT`: config directory. Defaults to `.orch/config`.
 - `ORCH_DATA_ROOT`: SQLite and run workspace directory. Defaults to `.orch/data`.
 - `ORCH_SKILL_REPOS`: comma-separated local paths or `owner/repo[@ref]` remote skill repositories.
-- `ORCH_AGENT_MODE`: `auto`, `claude`, `copilot`, or `mock`. `auto` uses each process's `agent_kind` and falls back to the local mock adapter when the selected CLI is missing.
+- `ORCH_AGENT_MODE`: `auto`, `claude`, `copilot`, or `mock`. `auto` uses each process's `agent_kind` and falls back to the local mock adapter when the selected CLI is missing. `claude` and `copilot` force that CLI for every process regardless of `agent_kind`.
 - `ORCH_CLAUDE_COMMAND`: Claude Code command. Defaults to `claude --print --verbose --output-format stream-json`.
 - `ORCH_COPILOT_COMMAND`: GitHub Copilot CLI command. Defaults to `copilot`.
 - `ORCH_DEFAULT_COPILOT_ALLOWED_TOOLS`: optional Copilot CLI allow-tool defaults, for example `write,shell(python3:*),shell(git:*)`.
