@@ -105,68 +105,67 @@ export function useNotifications({ resolveLabel, currentRunId, onOpen }: Args): 
     toastTimersRef.current.push(timer);
   }, []);
 
-  const fireNotification = useCallback((event: GlobalEvent) => {
-    if (!enabledRef.current) return;
+  const fireNotification = useCallback(
+    (event: GlobalEvent) => {
+      if (!enabledRef.current) return;
 
-    let status: string | null = null;
-    if (event.type === "qa") status = "waiting_qa";
-    else if (event.type === "status") {
-      const s = (event.payload?.status as string) ?? "";
-      if (s) status = s;
-    }
-    if (!status || !notifyEventsRef.current.includes(status)) return;
-
-    // Only suppress the QA prompt for the run the user is actively viewing
-    // (the QA panel is already on screen). Completion/failure should always
-    // notify, even while watching the run, so "done" never goes unnoticed.
-    if (
-      status === "waiting_qa" &&
-      currentRunRef.current === event.run_id &&
-      document.visibilityState === "visible"
-    ) {
-      return;
-    }
-
-    const dedupeKey = `${event.run_id}:${status}`;
-    if (notifiedRef.current.has(dedupeKey)) return;
-    notifiedRef.current.add(dedupeKey);
-
-    const label = resolveRef.current?.(event.workflow_id, event.process_id) ?? "a process";
-    const titleByStatus: Record<string, string> = {
-      waiting_qa: "QA needed",
-      in_review: "Ready for review",
-      failed: "Run failed",
-      approved: "Run approved",
-      rejected: "Run rejected"
-    };
-    const bodyByStatus: Record<string, string> = {
-      waiting_qa: `${label} is waiting for your answer.`,
-      in_review: `${label} was submitted for review.`,
-      failed: `${label} stopped with an error.`,
-      approved: `${label} was approved.`,
-      rejected: `${label} was rejected.`
-    };
-    const title = titleByStatus[status];
-    const body = bodyByStatus[status];
-    if (!title || !body) return;
-
-    // Best-effort desktop popup (may be silently suppressed by the OS, e.g.
-    // Windows Focus Assist), so we cannot rely on it being shown.
-    if (supported && Notification.permission === "granted") {
-      try {
-        const notification = new Notification(title, { body, tag: event.run_id });
-        notification.onclick = () => {
-          window.focus();
-          onOpenRef.current?.({ workflowId: event.workflow_id, runId: event.run_id });
-          notification.close();
-        };
-      } catch {
-        /* ignore; the in-app toast below is the reliable channel */
+      let status: string | null = null;
+      if (event.type === "qa") status = "waiting_qa";
+      else if (event.type === "status") {
+        const s = (event.payload?.status as string) ?? "";
+        if (s) status = s;
       }
-    }
-    // Always show an in-app toast — reliable regardless of OS/browser settings.
-    showToast({ title, body, workflowId: event.workflow_id, runId: event.run_id });
-  }, [showToast]);
+      if (!status || !notifyEventsRef.current.includes(status)) return;
+
+      // Only suppress the QA prompt for the run the user is actively viewing
+      // (the QA panel is already on screen). Completion/failure should always
+      // notify, even while watching the run, so "done" never goes unnoticed.
+      if (status === "waiting_qa" && currentRunRef.current === event.run_id && document.visibilityState === "visible") {
+        return;
+      }
+
+      const dedupeKey = `${event.run_id}:${status}`;
+      if (notifiedRef.current.has(dedupeKey)) return;
+      notifiedRef.current.add(dedupeKey);
+
+      const label = resolveRef.current?.(event.workflow_id, event.process_id) ?? "a process";
+      const titleByStatus: Record<string, string> = {
+        waiting_qa: "QA needed",
+        in_review: "Ready for review",
+        failed: "Run failed",
+        approved: "Run approved",
+        rejected: "Run rejected"
+      };
+      const bodyByStatus: Record<string, string> = {
+        waiting_qa: `${label} is waiting for your answer.`,
+        in_review: `${label} was submitted for review.`,
+        failed: `${label} stopped with an error.`,
+        approved: `${label} was approved.`,
+        rejected: `${label} was rejected.`
+      };
+      const title = titleByStatus[status];
+      const body = bodyByStatus[status];
+      if (!title || !body) return;
+
+      // Best-effort desktop popup (may be silently suppressed by the OS, e.g.
+      // Windows Focus Assist), so we cannot rely on it being shown.
+      if (supported && Notification.permission === "granted") {
+        try {
+          const notification = new Notification(title, { body, tag: event.run_id });
+          notification.onclick = () => {
+            window.focus();
+            onOpenRef.current?.({ workflowId: event.workflow_id, runId: event.run_id });
+            notification.close();
+          };
+        } catch {
+          /* ignore; the in-app toast below is the reliable channel */
+        }
+      }
+      // Always show an in-app toast — reliable regardless of OS/browser settings.
+      showToast({ title, body, workflowId: event.workflow_id, runId: event.run_id });
+    },
+    [showToast]
+  );
 
   useEffect(() => {
     if (!supported) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import defaultdict
 from typing import Any
 
@@ -55,7 +56,7 @@ class EventHub:
         GUI or an AI agent — can live-refresh the affected workflow. Not tied to a run.
         ``origin`` carries the id of the client that made the change so it can ignore
         its own echo. Best-effort: a delivery failure must never break the API call."""
-        try:
+        with contextlib.suppress(Exception):  # graph sync is advisory only
             await self.publish(
                 "",
                 {
@@ -68,5 +69,3 @@ class EventHub:
                     "payload": payload or {},
                 },
             )
-        except Exception:  # noqa: BLE001 - graph sync is advisory only
-            pass

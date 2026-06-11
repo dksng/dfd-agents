@@ -63,7 +63,11 @@ function sourceChangedSinceRun(artifact: ArtifactNode, run: RunSummary): boolean
     return (snapshot.url ?? "") !== (artifact.source_url ?? "");
   }
   const currentName = (artifact.source_file_path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
-  const snapshotName = String(snapshot.path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const snapshotName =
+    String(snapshot.path ?? "")
+      .split(/[\\/]/)
+      .filter(Boolean)
+      .pop() ?? "";
   return Boolean(currentName && snapshotName && currentName !== snapshotName);
 }
 
