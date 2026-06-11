@@ -544,6 +544,7 @@ export function App() {
               goalArtifacts={goalArtifacts}
               agentsBase={agentsBase}
               modelOptions={modelCatalog?.models ?? []}
+              defaultModelId={modelCatalog?.default_model ?? ""}
               onRun={() => processDraft && void runProcess(processDraft.id)}
               onSave={() => void saveProcess()}
               onDelete={() => void deleteSelectedProcess()}

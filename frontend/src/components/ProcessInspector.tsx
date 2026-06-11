@@ -49,6 +49,7 @@ type ProcessInspectorProps = {
   goalArtifacts: ArtifactNode[];
   agentsBase: string;
   modelOptions: ModelOption[];
+  defaultModelId: string;
   onRun: () => void;
   onSave: () => void;
   onDelete: () => void;
@@ -72,6 +73,7 @@ export function ProcessInspector({
   goalArtifacts,
   agentsBase,
   modelOptions,
+  defaultModelId,
   onRun,
   onSave,
   onDelete,
@@ -86,6 +88,19 @@ export function ProcessInspector({
     return null;
   }
   const displayedModelOptions = processDraft.agent_kind === "copilot" ? COPILOT_MODEL_OPTIONS : modelOptions;
+  const handleAgentKindChange = (kind: string) => {
+    onUpdateDraft("agent_kind", kind);
+    // A model from the previous agent kind is not runnable on the new one
+    // (e.g. a Bedrock ID passed to Copilot, or gpt-* passed to Claude).
+    const nextOptions = kind === "copilot" ? COPILOT_MODEL_OPTIONS : modelOptions;
+    if (nextOptions.some((model) => model.id === processDraft.agent_model)) {
+      return;
+    }
+    const fallback = kind === "copilot" ? "auto" : defaultModelId || nextOptions[0]?.id;
+    if (fallback) {
+      onUpdateDraft("agent_model", fallback);
+    }
+  };
   const allowedToolsPlaceholder =
     processDraft.agent_kind === "copilot"
       ? health?.default_copilot_allowed_tools || "write,shell(git:*),shell(python3:*)"
@@ -119,7 +134,7 @@ export function ProcessInspector({
       <div className="two-col">
         <label>
           Agent
-          <select value={processDraft.agent_kind} onChange={(event) => onUpdateDraft("agent_kind", event.target.value)}>
+          <select value={processDraft.agent_kind} onChange={(event) => handleAgentKindChange(event.target.value)}>
             <option value="claude">claude</option>
             <option value="copilot">copilot</option>
           </select>
